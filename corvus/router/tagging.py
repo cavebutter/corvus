@@ -7,9 +7,15 @@ applies it or holds it for review based on the confidence gate.
 No LLM calls — pure Python logic.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from corvus.schemas.document_tagging import ReviewQueueItem
 
 from corvus.integrations.paperless import PaperlessClient
 from corvus.schemas.document_tagging import (
@@ -88,6 +94,7 @@ async def resolve_and_route(
     document_types: list[PaperlessDocumentType],
     existing_doc_tag_ids: list[int],
     force_queue: bool = True,
+    force_apply: bool = False,
 ) -> RoutingResult:
     """Resolve names to IDs, apply confidence gate, and optionally write to Paperless.
 
@@ -100,6 +107,8 @@ async def resolve_and_route(
         existing_doc_tag_ids: The document's current tag IDs (for merging).
         force_queue: If True, override the gate and queue everything for review.
             This is the initial posture per CLAUDE.md.
+        force_apply: If True, override the gate and always apply the update.
+            Used after human approval in the review flow.
 
     Returns:
         RoutingResult with the proposed update and whether it was applied.
@@ -143,7 +152,12 @@ async def resolve_and_route(
     )
 
     # --- 2. Determine effective action ---
-    effective_action = GateAction.QUEUE_FOR_REVIEW if force_queue else task.gate_action
+    if force_apply:
+        effective_action = GateAction.AUTO_EXECUTE
+    elif force_queue:
+        effective_action = GateAction.QUEUE_FOR_REVIEW
+    else:
+        effective_action = task.gate_action
     should_apply = effective_action in (GateAction.AUTO_EXECUTE, GateAction.FLAG_IN_DIGEST)
 
     # --- 3. Create missing entities if we're applying ---
@@ -218,4 +232,38 @@ async def resolve_and_route(
         proposed_update=proposed,
         applied=applied,
         effective_action=effective_action,
+    )
+
+
+async def apply_approved_update(
+    item: "ReviewQueueItem",
+    *,
+    paperless: PaperlessClient,
+) -> RoutingResult:
+    """Apply a previously-reviewed queue item to Paperless.
+
+    Re-fetches current Paperless state (tags, correspondents, document types,
+    and the document itself) to get up-to-date IDs, then routes with
+    force_apply=True to create any missing entities and write the update.
+
+    Args:
+        item: The approved ReviewQueueItem.
+        paperless: An open PaperlessClient.
+
+    Returns:
+        RoutingResult with applied=True on success.
+    """
+    doc = await paperless.get_document(item.task.document_id)
+    tags = await paperless.list_tags()
+    correspondents = await paperless.list_correspondents()
+    document_types = await paperless.list_document_types()
+
+    return await resolve_and_route(
+        item.task,
+        paperless=paperless,
+        tags=tags,
+        correspondents=correspondents,
+        document_types=document_types,
+        existing_doc_tag_ids=doc.tags,
+        force_apply=True,
     )

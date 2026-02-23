@@ -85,15 +85,26 @@ class PaperlessClient:
         page: int = 1,
         page_size: int = 25,
         ordering: str = "-added",
+        filter_params: dict | None = None,
     ) -> tuple[list[PaperlessDocument], int]:
         """Fetch a single page of documents.
+
+        Args:
+            page: Page number (1-indexed).
+            page_size: Number of documents per page.
+            ordering: Sort order field.
+            filter_params: Additional query parameters for filtering
+                (e.g. ``{"tags__isnull": True}`` to fetch untagged documents).
 
         Returns:
             Tuple of (documents, total_count).
         """
+        params: dict = {"page": page, "page_size": page_size, "ordering": ordering}
+        if filter_params:
+            params.update(filter_params)
         data = await self._get(
             "/api/documents/",
-            params={"page": page, "page_size": page_size, "ordering": ordering},
+            params=params,
         )
         docs = [PaperlessDocument.model_validate(r) for r in data["results"]]
         return docs, data["count"]

@@ -4,7 +4,7 @@ import pytest
 
 from corvus.config import OLLAMA_BASE_URL, PAPERLESS_API_TOKEN, PAPERLESS_BASE_URL
 from corvus.executors.document_tagger import tag_document
-from corvus.integrations.ollama import OllamaClient
+from corvus.integrations.ollama import OllamaClient, pick_instruct_model
 from corvus.integrations.paperless import PaperlessClient
 from corvus.router.tagging import (
     RoutingResult,
@@ -199,14 +199,6 @@ class TestForceQueue:
 # --- Integration test (requires Ollama + Paperless) ---
 
 
-def _pick_instruct_model(models: list[dict]) -> str | None:
-    for m in models:
-        name = m["name"].lower()
-        if "instruct" in name or "chat" in name or "qwen" in name or "gemma" in name:
-            return m["name"]
-    return models[0]["name"] if models else None
-
-
 @pytest.mark.slow
 @pytest.mark.skipif(
     not PAPERLESS_API_TOKEN or PAPERLESS_API_TOKEN == "placeholder",
@@ -219,7 +211,7 @@ async def test_resolve_and_route_live():
         OllamaClient(OLLAMA_BASE_URL) as ollama,
     ):
         models = await ollama.list_models()
-        model_name = _pick_instruct_model(models)
+        model_name = pick_instruct_model(models)
         if not model_name:
             pytest.skip("No models available on Ollama server")
 

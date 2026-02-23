@@ -4,6 +4,52 @@
 
 ---
 
+## Session: 2026-02-23 (session 4)
+
+### What was done
+- Completed Epic 5: CLI Entry Point (9 stories)
+- `pyproject.toml`: Added `click>=8.0` dependency and `[project.scripts] corvus = "corvus.cli:cli"` entry point
+- `corvus/integrations/ollama.py`: Extracted shared `pick_instruct_model()` function (+ `OllamaClient.pick_instruct_model()` method); removed duplicated copies from 3 test files
+- `corvus/integrations/paperless.py`: Added `filter_params` kwarg to `list_documents()` — enables `{"tags__isnull": True}` for fetching untagged docs
+- `corvus/router/tagging.py`: Added `force_apply` param to `resolve_and_route()` (overrides gate to always apply); added `apply_approved_update()` for re-fetching current Paperless state and applying after human approval
+- `corvus/cli.py` (new): Click-based CLI with 4 commands:
+  - `corvus tag` — batch-tag with `--limit`, `--model` (auto-detected), `--all`, `--keep-alive`, `--force-queue`; sequential page-by-page processing; per-doc error handling
+  - `corvus review` — interactive review: shows details, prompts [a]pprove/[r]eject/[s]kip/[q]uit; approve calls `apply_approved_update()` to write to Paperless
+  - `corvus digest` — calls existing `generate_digest()` + `render_text()`
+  - `corvus status` — pending count + 24h processed/reviewed counts
+- `tests/test_cli.py` (new): 14 tests using Click CliRunner with mocked Paperless/Ollama
+- Fixed infinite loop bug: errors now count toward `--limit` to prevent re-fetching the same failing doc
+
+### Current state
+- **Epic 1:** Complete
+- **Epic 2:** Complete
+- **Epic 5:** Complete (CLI entry point)
+- **Epics 3 & 4:** Backlogged
+- **All tests passing:** 89 total (85 fast, 4 slow/live)
+- **Test breakdown:**
+  - `test_cli.py` — 14 (all unit, mocked)
+  - `test_paperless_client.py` — 4
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+
+### Smoke test results
+- All 4 commands verified against live Paperless + Ollama
+- `corvus tag --limit 1` classified PHH Mortgage Escrow doc (id=94) in ~4s, 100% confidence, queued for review
+- `corvus review` approved it — created 2 new tags (escrow-account, statement), 1 new correspondent (PH Mortgage Services), PATCHed document
+- `corvus digest` showed full activity trail
+- 94 untagged documents remaining in Paperless
+
+### Next steps
+- Batch-tag remaining 94 untagged documents: `corvus tag` (or in smaller batches)
+- Consider next work: Epic 3 (document retrieval), Epic 4 (scan watchdog), or Phase 2 (tiered architecture)
+
+---
+
 ## Session: 2026-02-23 (session 3)
 
 ### What was done

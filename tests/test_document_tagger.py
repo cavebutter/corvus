@@ -8,7 +8,7 @@ from corvus.executors.document_tagger import (
     _determine_gate_action,
     tag_document,
 )
-from corvus.integrations.ollama import OllamaClient
+from corvus.integrations.ollama import OllamaClient, pick_instruct_model
 from corvus.integrations.paperless import PaperlessClient
 from corvus.schemas.document_tagging import (
     DocumentTaggingResult,
@@ -81,16 +81,6 @@ class TestDetermineGateAction:
 # --- Integration test (requires Ollama + Paperless) ---
 
 
-def _pick_instruct_model(models: list[dict]) -> str | None:
-    """Prefer instruct/chat models over creative/RP models."""
-    for m in models:
-        name = m["name"].lower()
-        if "instruct" in name or "chat" in name or "qwen" in name or "gemma" in name:
-            return m["name"]
-    # Fall back to first model if no instruct model found
-    return models[0]["name"] if models else None
-
-
 @pytest.mark.slow
 @pytest.mark.skipif(
     not PAPERLESS_API_TOKEN or PAPERLESS_API_TOKEN == "placeholder",
@@ -104,7 +94,7 @@ async def test_tag_document_live():
     ):
         # Get available model (prefer instruct models)
         models = await ollama.list_models()
-        model_name = _pick_instruct_model(models)
+        model_name = pick_instruct_model(models)
         if not model_name:
             pytest.skip("No models available on Ollama server")
 

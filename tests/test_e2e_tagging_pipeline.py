@@ -13,19 +13,11 @@ from corvus.audit.logger import AuditLog
 from corvus.config import OLLAMA_BASE_URL, PAPERLESS_API_TOKEN, PAPERLESS_BASE_URL
 from corvus.digest.daily import generate_digest, render_text
 from corvus.executors.document_tagger import tag_document
-from corvus.integrations.ollama import OllamaClient
+from corvus.integrations.ollama import OllamaClient, pick_instruct_model
 from corvus.integrations.paperless import PaperlessClient
 from corvus.queue.review import ReviewQueue
 from corvus.router.tagging import resolve_and_route
 from corvus.schemas.document_tagging import GateAction, ReviewStatus
-
-
-def _pick_instruct_model(models: list[dict]) -> str | None:
-    for m in models:
-        name = m["name"].lower()
-        if "instruct" in name or "chat" in name or "qwen" in name or "gemma" in name:
-            return m["name"]
-    return models[0]["name"] if models else None
 
 
 @pytest.mark.slow
@@ -45,7 +37,7 @@ async def test_full_tagging_pipeline(tmp_path):
         with ReviewQueue(tmp_path / "queue.db") as review_queue:
             # --- 1. Discover model and document ---
             models = await ollama.list_models()
-            model_name = _pick_instruct_model(models)
+            model_name = pick_instruct_model(models)
             if not model_name:
                 pytest.skip("No models available on Ollama server")
 

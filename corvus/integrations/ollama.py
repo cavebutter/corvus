@@ -129,6 +129,18 @@ class OllamaClient:
         response.raise_for_status()
         return response.json().get("models", [])
 
+    async def pick_instruct_model(self) -> str | None:
+        """Auto-detect the best instruct/chat model available on the server.
+
+        Prefers models with 'instruct', 'chat', 'qwen', or 'gemma' in the name.
+        Falls back to the first available model if none match.
+
+        Returns:
+            Model name string, or None if no models are available.
+        """
+        models = await self.list_models()
+        return pick_instruct_model(models)
+
     async def unload_model(self, model: str) -> None:
         """Explicitly unload a model from VRAM."""
         response = await self._client.post(
@@ -141,3 +153,22 @@ class OllamaClient:
         )
         response.raise_for_status()
         logger.info("Unloaded model %s", model)
+
+
+def pick_instruct_model(models: list[dict]) -> str | None:
+    """Select the best instruct/chat model from a list of Ollama models.
+
+    Prefers models with 'instruct', 'chat', 'qwen', or 'gemma' in the name.
+    Falls back to the first available model if none match.
+
+    Args:
+        models: List of model dicts from Ollama's /api/tags endpoint.
+
+    Returns:
+        Model name string, or None if the list is empty.
+    """
+    for m in models:
+        name = m["name"].lower()
+        if "instruct" in name or "chat" in name or "qwen" in name or "gemma" in name:
+            return m["name"]
+    return models[0]["name"] if models else None
