@@ -24,12 +24,12 @@
 - [x] **S2.1** Define Pydantic schemas for document tagging pipeline (`corvus/schemas/`)
 - [x] **S2.2** Build async Paperless-ngx API client (`corvus/integrations/paperless.py`)
 - [x] **S2.3** Build Ollama LLM client for structured output (`corvus/integrations/ollama.py`)
-- [ ] **S2.4** Implement document tagger executor (`corvus/executors/document_tagger.py`)
-- [ ] **S2.5** Implement confidence gate logic in router
-- [ ] **S2.6** Implement review queue (SQLite-based)
-- [ ] **S2.7** Implement audit logging
-- [ ] **S2.8** Implement daily digest generation
-- [ ] **S2.9** End-to-end integration test with Paperless sandbox
+- [x] **S2.4** Implement document tagger executor (`corvus/executors/document_tagger.py`)
+- [x] **S2.5** Implement confidence gate logic in router (`corvus/router/tagging.py`)
+- [x] **S2.6** Implement review queue (SQLite-based) (`corvus/queue/review.py`)
+- [x] **S2.7** Implement audit logging (`corvus/audit/logger.py`)
+- [x] **S2.8** Implement daily digest generation (`corvus/digest/daily.py`)
+- [x] **S2.9** End-to-end integration test (`tests/test_e2e_tagging_pipeline.py`)
 
 ---
 
