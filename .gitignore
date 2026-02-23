@@ -1,0 +1,29 @@
+# Secrets — never commit plaintext
+secrets/*.env
+secrets/*.env.bak
+.env
+.env.*
+# Encrypted secrets ARE safe to commit
+!secrets/*.env.enc
+!.sops.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+
+# IDE
+.idea/
+
+# Data (runtime artifacts)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
