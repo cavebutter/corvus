@@ -1,6 +1,5 @@
 """Tests for the Corvus CLI entry point."""
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click.testing
@@ -12,7 +11,6 @@ from corvus.schemas.document_tagging import (
     DocumentTaggingTask,
     GateAction,
     ProposedDocumentUpdate,
-    ReviewQueueItem,
     ReviewStatus,
     TagSuggestion,
 )
@@ -22,7 +20,6 @@ from corvus.schemas.paperless import (
     PaperlessDocumentType,
     PaperlessTag,
 )
-
 
 # ------------------------------------------------------------------
 # Helpers
@@ -105,6 +102,8 @@ def _mock_paperless(docs=None, count=0):
     mock.list_tags.return_value = SAMPLE_TAGS
     mock.list_correspondents.return_value = SAMPLE_CORRESPONDENTS
     mock.list_document_types.return_value = SAMPLE_DOC_TYPES
+    # get_document_url is sync — use MagicMock to avoid coroutine return
+    mock.get_document_url = MagicMock(return_value="")
     return mock
 
 
@@ -462,6 +461,353 @@ def test_review_skip_and_quit(runner, tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------------
+# corvus fetch
+# ------------------------------------------------------------------
+
+
+def _make_interpretation(confidence=0.9, correspondent=None, doc_type=None, **kwargs):
+    from corvus.schemas.document_retrieval import QueryInterpretation
+
+    defaults = {
+        "confidence": confidence,
+        "reasoning": "Test interpretation",
+        "correspondent_name": correspondent,
+        "document_type_name": doc_type,
+        "sort_order": "newest",
+    }
+    defaults.update(kwargs)
+    return QueryInterpretation(**defaults)
+
+
+def _make_resolved_params(**kwargs):
+    from corvus.schemas.document_retrieval import ResolvedSearchParams
+
+    return ResolvedSearchParams(**kwargs)
+
+
+def test_fetch_rejects_missing_config(runner, monkeypatch):
+    """Fetch command should fail if Paperless config is missing."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "")
+    result = runner.invoke(cli, ["fetch", "test"])
+    assert result.exit_code != 0
+    assert "Missing required config" in result.output
+
+
+def test_fetch_help(runner):
+    result = runner.invoke(cli, ["fetch", "--help"])
+    assert result.exit_code == 0
+    assert "--model" in result.output
+    assert "--method" in result.output
+    assert "--download-dir" in result.output
+    assert "--keep-alive" in result.output
+
+
+def test_fetch_single_result_browser(runner, monkeypatch):
+    """Fetch with a single result auto-delivers via browser."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    doc = _make_document(doc_id=73, title="Invoice - AT&T Wireless")
+    interp = _make_interpretation(correspondent="AT&T", doc_type="Invoice")
+    params = _make_resolved_params(correspondent_id=10, document_type_id=20)
+    mock_raw = MagicMock()
+    mock_raw.done = True
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless(docs=[doc], count=1)
+    mock_paperless.get_document_url.return_value = "http://localhost:8000/documents/73/details"
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, [doc], 1),
+        ),
+        patch("webbrowser.open") as mock_browser,
+    ):
+        result = runner.invoke(cli, ["fetch", "invoice", "from", "AT&T"])
+
+    assert result.exit_code == 0
+    assert "Invoice - AT&T Wireless" in result.output
+    assert "Opening" in result.output
+    mock_browser.assert_called_once_with("http://localhost:8000/documents/73/details")
+
+
+def test_fetch_multiple_results_select(runner, monkeypatch):
+    """Fetch with multiple results shows numbered list and accepts selection."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    docs = [
+        _make_document(doc_id=73, title="Invoice - AT&T March"),
+        _make_document(doc_id=58, title="Invoice - AT&T February"),
+    ]
+    interp = _make_interpretation(correspondent="AT&T")
+    params = _make_resolved_params(correspondent_id=10)
+    mock_raw = MagicMock()
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless(docs=docs, count=2)
+    mock_paperless.get_document_url.return_value = "http://localhost:8000/documents/58/details"
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, docs, 2),
+        ),
+        patch("webbrowser.open") as mock_browser,
+    ):
+        result = runner.invoke(cli, ["fetch", "invoices", "from", "AT&T"], input="2\n")
+
+    assert result.exit_code == 0
+    assert "Found 2 document(s)" in result.output
+    assert "Invoice - AT&T March" in result.output
+    assert "Invoice - AT&T February" in result.output
+    mock_browser.assert_called_once()
+
+
+def test_fetch_no_results(runner, monkeypatch):
+    """Fetch with no results displays a message."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    interp = _make_interpretation(correspondent="Nobody")
+    params = _make_resolved_params(warnings=["Correspondent not found: 'Nobody'"])
+    mock_raw = MagicMock()
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, [], 0),
+        ),
+    ):
+        result = runner.invoke(cli, ["fetch", "stuff", "from", "Nobody"])
+
+    assert result.exit_code == 0
+    assert "No documents found" in result.output
+    assert "Warning" in result.output
+
+
+def test_fetch_low_confidence_abort(runner, monkeypatch):
+    """Fetch aborts when confidence is low and user declines."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    interp = _make_interpretation(confidence=0.3)
+    mock_raw = MagicMock()
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+    ):
+        result = runner.invoke(cli, ["fetch", "vague", "query"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "Low confidence" in result.output
+    assert "Aborted" in result.output
+
+
+def test_fetch_low_confidence_continue(runner, monkeypatch):
+    """Fetch continues when confidence is low and user confirms."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    doc = _make_document(doc_id=1, title="Some Doc")
+    interp = _make_interpretation(confidence=0.3)
+    params = _make_resolved_params()
+    mock_raw = MagicMock()
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless(docs=[doc], count=1)
+    mock_paperless.get_document_url.return_value = "http://localhost:8000/documents/1/details"
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, [doc], 1),
+        ),
+        patch("webbrowser.open"),
+    ):
+        result = runner.invoke(cli, ["fetch", "vague", "query"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Some Doc" in result.output
+
+
+def test_fetch_download(runner, monkeypatch, tmp_path):
+    """Fetch with --method=download saves file locally."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    doc = _make_document(doc_id=42, title="Invoice PDF")
+    interp = _make_interpretation()
+    params = _make_resolved_params()
+    mock_raw = MagicMock()
+    download_path = tmp_path / "invoice.pdf"
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless(docs=[doc], count=1)
+    mock_paperless.download_document.return_value = download_path
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, [doc], 1),
+        ),
+    ):
+        result = runner.invoke(
+            cli,
+            ["fetch", "invoice", "--method", "download", "--download-dir", str(tmp_path)],
+        )
+
+    assert result.exit_code == 0
+    assert "Downloaded" in result.output
+    mock_paperless.download_document.assert_called_once()
+
+
+def test_fetch_quit_selection(runner, monkeypatch):
+    """User can quit at the selection prompt."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    docs = [_make_document(1, "Doc 1"), _make_document(2, "Doc 2")]
+    interp = _make_interpretation()
+    params = _make_resolved_params()
+    mock_raw = MagicMock()
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless(docs=docs, count=2)
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, docs, 2),
+        ),
+    ):
+        result = runner.invoke(cli, ["fetch", "docs"], input="q\n")
+
+    assert result.exit_code == 0
+    assert "Aborted" in result.output
+
+
+def test_fetch_no_model_available(runner, monkeypatch):
+    """Fetch command fails if no Ollama models are available."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    with (
+        _patch_async_context(
+            "corvus.integrations.ollama.OllamaClient", _mock_ollama(model_name=None)
+        ),
+        _patch_async_context(
+            "corvus.integrations.paperless.PaperlessClient", _mock_paperless()
+        ),
+    ):
+        result = runner.invoke(cli, ["fetch", "test"])
+
+    assert result.exit_code != 0
+    assert "No models available" in result.output
+
+
+def test_fetch_many_results_truncation(runner, monkeypatch):
+    """Fetch with >10 results shows first 10 and suggests refining."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    docs = [_make_document(doc_id=i, title=f"Doc {i}") for i in range(1, 16)]
+    interp = _make_interpretation()
+    params = _make_resolved_params()
+    mock_raw = MagicMock()
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless(docs=docs, count=25)
+    mock_paperless.get_document_url.return_value = "http://localhost:8000/documents/5/details"
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, docs, 25),
+        ),
+        patch("webbrowser.open"),
+    ):
+        result = runner.invoke(cli, ["fetch", "docs"], input="5\n")
+
+    assert result.exit_code == 0
+    assert "25 document(s)" in result.output
+    assert "refining" in result.output
+    # Only first 10 shown
+    assert "Doc 10" in result.output
+    assert "Doc 11" not in result.output
+
+
+# ------------------------------------------------------------------
 # corvus --help
 # ------------------------------------------------------------------
 
@@ -474,6 +820,7 @@ def test_help(runner):
     assert "review" in result.output
     assert "digest" in result.output
     assert "status" in result.output
+    assert "fetch" in result.output
 
 
 def test_tag_help(runner):

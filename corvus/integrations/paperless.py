@@ -147,6 +147,38 @@ class PaperlessClient:
         response.raise_for_status()
         return response.text.strip()
 
+    async def download_document(self, doc_id: int, dest_path: str | Path) -> Path:
+        """Download a document's original file from Paperless-ngx.
+
+        Uses ``GET /api/documents/{id}/download/`` to fetch the original file.
+
+        Args:
+            doc_id: Paperless document ID.
+            dest_path: Directory or file path to save to. If a directory,
+                the filename from the Content-Disposition header is used.
+
+        Returns:
+            Path to the downloaded file.
+        """
+        dest = Path(dest_path)
+        response = await self._client.get(f"/api/documents/{doc_id}/download/")
+        response.raise_for_status()
+
+        if dest.is_dir():
+            # Extract filename from Content-Disposition header
+            cd = response.headers.get("content-disposition", "")
+            filename = f"document_{doc_id}"
+            if "filename=" in cd:
+                # Parse: attachment; filename="somefile.pdf"
+                parts = cd.split("filename=")
+                if len(parts) > 1:
+                    filename = parts[1].strip().strip('"')
+            dest = dest / filename
+
+        dest.write_bytes(response.content)
+        logger.info("Downloaded document %d to %s", doc_id, dest)
+        return dest
+
     async def update_document(self, doc_id: int, payload: dict) -> PaperlessDocument:
         """PATCH a document. Only include fields you want to change.
 
@@ -154,6 +186,10 @@ class PaperlessClient:
         """
         data = await self._patch(f"/api/documents/{doc_id}/", payload)
         return PaperlessDocument.model_validate(data)
+
+    def get_document_url(self, doc_id: int) -> str:
+        """Return the browser URL for viewing a document in the Paperless-ngx UI."""
+        return f"{self._base_url}/documents/{doc_id}/details"
 
     # ------------------------------------------------------------------
     # Tags

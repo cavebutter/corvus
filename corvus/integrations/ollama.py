@@ -49,7 +49,12 @@ class OllamaClient:
         self._default_keep_alive = default_keep_alive
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
-            timeout=120.0,
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=300.0,   # model load + inference can be slow
+                write=10.0,
+                pool=10.0,
+            ),
         )
 
     async def __aenter__(self) -> "OllamaClient":

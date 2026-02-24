@@ -4,6 +4,107 @@
 
 ---
 
+## Session: 2026-02-24 (sessions 7–8)
+
+### What was done
+- Completed Epic 3: Paperless Document Retrieval (5 stories: S3.1–S3.5)
+- `corvus/schemas/document_retrieval.py` (new): `QueryInterpretation`, `ResolvedSearchParams`, `DeliveryMethod` schemas; `used_fallback: bool` field on `ResolvedSearchParams`
+- `corvus/executors/query_interpreter.py` (new): Stateless async `interpret_query()` — LLM parses natural language into structured search params; system prompt includes available correspondents/types/tags + today's date
+- `corvus/router/retrieval.py` (new): `resolve_search_params()` resolves names to IDs with warnings; `build_filter_params()` constructs Paperless API filter dict; `resolve_and_search()` orchestrates the full flow with three-tier fallback cascade
+- `corvus/integrations/paperless.py`: Added `download_document(doc_id, dest_path) -> Path` (streams original file via API) and `get_document_url(doc_id) -> str` (browser URL)
+- `corvus/cli.py`: Added `corvus fetch` command — `nargs=-1` query (no quotes needed), `--method browser|download`, `--download-dir`, `--keep-alive`; interactive numbered list for multiple results; low confidence confirmation; unresolved name warnings; fallback notice
+- **Fallback search cascade** (session 8 — live-testing revealed LLM-resolved filters can be wrong or over-restrictive):
+  - Unresolved entity names folded into text search with user-visible warnings
+  - When structured filters return 0 results, three fallback levels tried in order:
+    1. **Per-tag**: tries each resolved tag individually (broadens AND → per-tag; stops on first tag with results)
+    2. **Text-only**: drops all structured filters, uses full-text `query` param
+    3. **Title/content**: uses Paperless `title_content` filter (case-insensitive substring match on title/content — catches what full-text engine misses, works for untagged docs)
+  - `used_fallback` flag + CLI notice: "Structured filters returned no results; showing results from relaxed search."
+  - Fallback 3 also triggers for pure text queries (outside the structured-filters gate)
+- Tests: 59 new tests across 3 files (8 + 38 + 13)
+  - `tests/test_query_interpreter.py` (new) — 8 tests: prompt construction, mocked LLM, keep_alive forwarding, 1 live test
+  - `tests/test_retrieval_router.py` (new) — 38 tests: name resolution (15), filter param construction (8), search + fallback cascade (15)
+  - `tests/test_cli.py` (extended) — 13 new fetch tests: single result, multi-select, no results, low confidence abort/continue, download, quit, no model, many results truncation
+- Updated backlog: Epic 3 moved to archive, current backlog cleared
+
+### Current state
+- **Epics 1, 2, 3, 4, 5:** Complete (archived)
+- **All tests passing:** 191 total (187 fast, 4 slow/live)
+- **Test breakdown:**
+  - `test_cli.py` — 29 (all unit, mocked)
+  - `test_query_interpreter.py` — 8 (7 unit + 1 slow live)
+  - `test_retrieval_router.py` — 38 (all unit)
+  - `test_paperless_client.py` — 4
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### Smoke test results
+- `corvus fetch the trust transfer document for howard st property`: LLM extracted `document_type=statement` (wrong match) + text. Initial structured search → 0. Text-only fallback → 4 results. Correct doc ("Trust Transfer Howard", id=27) at position 1. ✓
+- `corvus fetch documents related to fy2022 taxes`: LLM extracted `tags=[Taxes, FY 2022]` (both resolved) + text. Initial `tags__id__all` (AND) → 0 (too strict). Per-tag fallback on tag "Taxes" (id=4) → 14 results. Results are broad (all Taxes-tagged docs) — needs refinement (TODO: pick smallest result set across tags instead of first hit).
+
+### Key design decisions
+- **LLM interprets, Python searches** — same pattern as tagging pipeline
+- **No confidence gates** — retrieval is read-only + interactive; user always picks
+- **No audit logging** — read-only, not compliance-critical
+- **Reuse name resolution** — imports `resolve_tag/correspondent/document_type` from `corvus.router.tagging`
+- **Reuse `list_documents()`** — no new Paperless search method; `filter_params={"query": ..., "correspondent__id": X}` already works
+- **`nargs=-1`** for query — no quotes needed: `corvus fetch most recent invoice from AT&T`
+- **10-result display cap** — shows first 10 of many, suggests refining query
+- **Three-tier fallback** — per-tag → text-only → title/content substring. Each level progressively relaxes constraints. `used_fallback` only set when a fallback actually produces results.
+- **`title_content`** — Paperless-ngx custom filter: `Q(title__icontains=value) | Q(content__icontains=value)`. Useful for untagged docs or when full-text tokenization misses substring matches.
+
+### Next steps / known improvements
+- Per-tag fallback: pick smallest (most specific) result set instead of stopping on first hit
+- Consider next work: Phase 2 (tiered architecture), mobile delivery, or Phase 3 (email)
+
+---
+
+## Session: 2026-02-23 (session 6)
+
+### What was done
+- Added `[e]dit` option to `corvus review` (S5.10)
+- `corvus/router/tagging.py`: `apply_approved_update()` now accepts `extra_tag_names: list[str] | None` — appends them as `TagSuggestion(confidence=1.0)` entries to a copy of the task before routing
+- `corvus/queue/review.py`: Added `modify()` method — sets `ReviewStatus.MODIFIED` (mirrors `approve`/`reject`)
+- `corvus/cli.py`: Review prompt now `[a]pprove / [e]dit / [r]eject / [s]kip / [q]uit`; pressing `e` prompts for comma-separated tags, resolves via existing pipeline, marks as MODIFIED with reviewer_notes
+- `tests/test_cli.py`: 2 new tests — `test_review_edit_adds_tags`, `test_review_edit_empty_tags_approves_normally`
+- Moved Epic 4 from `backlog_current.md` to `backlog_archive.md`
+
+### Current state
+- **Epics 1, 2, 4, 5:** Complete (archived)
+- **Epic 3:** Backlogged (document retrieval)
+- **All tests passing:** 134 total (130 fast, 4 slow/live)
+- **Test breakdown:**
+  - `test_cli.py` — 16 (all unit, mocked)
+  - `test_paperless_client.py` — 4
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 11
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 13
+  - `test_watchdog_cli.py` — 5
+
+### Next steps
+- Smoke test `corvus review` edit flow against real Paperless instance
+- Smoke test `corvus watch --once` against real scan directory + Paperless
+- Consider Epic 3 (document retrieval) or Phase 2 (tiered architecture)
+- Consider systemd service for always-on watchdog monitoring
+
+---
+
 ## Session: 2026-02-23 (session 5)
 
 ### What was done

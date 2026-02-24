@@ -192,7 +192,7 @@ async def _tag_async(
                     except Exception:
                         errors += 1
                         logger.exception("Error processing document %d: %s", doc.id, doc.title)
-                        click.echo(f"  ERROR: Failed to process (see log for details)", err=True)
+                        click.echo("  ERROR: Failed to process (see log for details)", err=True)
 
                 if limit > 0 and (processed + errors) >= limit:
                     break
@@ -481,3 +481,176 @@ async def _watch_async(
         finally:
             if paperless_client:
                 await paperless_client.close()
+
+
+# ------------------------------------------------------------------
+# corvus fetch
+# ------------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("query", nargs=-1, required=True)
+@click.option("--model", "-m", default=None, help="Ollama model name (auto-detected if omitted).")
+@click.option(
+    "--method",
+    type=click.Choice(["browser", "download"], case_sensitive=False),
+    default="browser",
+    show_default=True,
+    help="Delivery method: open in browser or download file.",
+)
+@click.option(
+    "--download-dir",
+    default=None,
+    help="Download directory (defaults to ~/Downloads).",
+)
+@click.option("--keep-alive", default="5m", show_default=True, help="Ollama keep_alive duration.")
+def fetch(
+    query: tuple[str, ...],
+    model: str | None,
+    method: str,
+    download_dir: str | None,
+    keep_alive: str,
+) -> None:
+    """Retrieve a document from Paperless-ngx via natural language."""
+    _validate_config()
+    query_str = " ".join(query)
+    if not query_str.strip():
+        click.echo("Error: Query cannot be empty.", err=True)
+        sys.exit(1)
+    asyncio.run(_fetch_async(query_str, model, method, download_dir, keep_alive))
+
+
+async def _fetch_async(
+    query: str,
+    model: str | None,
+    method: str,
+    download_dir: str | None,
+    keep_alive: str,
+) -> None:
+    import webbrowser
+    from pathlib import Path
+
+    from corvus.executors.query_interpreter import interpret_query
+    from corvus.integrations.ollama import OllamaClient
+    from corvus.integrations.paperless import PaperlessClient
+    from corvus.router.retrieval import resolve_and_search
+    from corvus.schemas.document_retrieval import DeliveryMethod
+
+    delivery = DeliveryMethod(method)
+
+    async with (
+        PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
+        OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
+    ):
+        # --- Resolve model ---
+        if model is None:
+            model = await ollama.pick_instruct_model()
+            if model is None:
+                click.echo("Error: No models available on Ollama server.", err=True)
+                sys.exit(1)
+            click.echo(f"Auto-selected model: {model}")
+
+        # --- Fetch metadata for LLM context ---
+        tags = await paperless.list_tags()
+        correspondents = await paperless.list_correspondents()
+        doc_types = await paperless.list_document_types()
+
+        # --- Step 1: Interpret query via LLM ---
+        click.echo(f"\nInterpreting: \"{query}\"")
+        interpretation, _raw = await interpret_query(
+            query,
+            ollama=ollama,
+            model=model,
+            tags=tags,
+            correspondents=correspondents,
+            document_types=doc_types,
+            keep_alive=keep_alive,
+        )
+
+        # Display interpretation
+        click.echo(f"  Confidence: {interpretation.confidence:.0%}")
+        click.echo(f"  Reasoning: {interpretation.reasoning}")
+        if interpretation.correspondent_name:
+            click.echo(f"  Correspondent: {interpretation.correspondent_name}")
+        if interpretation.document_type_name:
+            click.echo(f"  Document type: {interpretation.document_type_name}")
+        if interpretation.tag_names:
+            click.echo(f"  Tags: {interpretation.tag_names}")
+        if interpretation.text_search:
+            click.echo(f"  Text search: {interpretation.text_search}")
+        if interpretation.date_range_start or interpretation.date_range_end:
+            click.echo(
+                f"  Date range: {interpretation.date_range_start or '...'}"
+                f" to {interpretation.date_range_end or '...'}"
+            )
+
+        # --- Low confidence check ---
+        if interpretation.confidence < 0.5 and not click.confirm(
+            "\nLow confidence. Continue?", default=False
+        ):
+            click.echo("Aborted.")
+            return
+
+        # --- Step 2: Resolve and search ---
+        params, docs, total = await resolve_and_search(
+            interpretation,
+            paperless=paperless,
+            tags=tags,
+            correspondents=correspondents,
+            document_types=doc_types,
+        )
+
+        # Show warnings about unresolved names
+        for warning in params.warnings:
+            click.echo(f"  Warning: {warning}")
+
+        if params.used_fallback:
+            click.echo("  Note: Structured filters returned no results; showing results from relaxed search.")
+
+        # --- Step 3: Display results and deliver ---
+        if total == 0:
+            click.echo("\nNo documents found.")
+            return
+
+        click.echo(f"\nFound {total} document(s).")
+
+        if len(docs) == 1 and total == 1:
+            # Single result — auto-deliver
+            doc = docs[0]
+            click.echo(f"  1. [{doc.created[:10]}] {doc.title}  (id={doc.id})")
+            selected = doc
+        else:
+            # Multiple results — interactive selection
+            display_count = min(len(docs), 10)
+            for i, doc in enumerate(docs[:display_count], 1):
+                click.echo(f"  {i:>2}. [{doc.created[:10]}] {doc.title}  (id={doc.id})")
+
+            if total > display_count:
+                click.echo(f"  ... and {total - display_count} more. Consider refining your query.")
+
+            raw_choice = click.prompt(
+                "\nSelect", prompt_suffix=f" [1-{display_count}, q to quit]: "
+            )
+            if raw_choice.strip().lower() == "q":
+                click.echo("Aborted.")
+                return
+
+            try:
+                idx = int(raw_choice) - 1
+                if idx < 0 or idx >= display_count:
+                    raise ValueError
+                selected = docs[idx]
+            except (ValueError, IndexError):
+                click.echo("Invalid selection.", err=True)
+                sys.exit(1)
+
+        # --- Step 4: Deliver ---
+        if delivery == DeliveryMethod.BROWSER:
+            url = paperless.get_document_url(selected.id)
+            click.echo(f"Opening: {url}")
+            webbrowser.open(url)
+        else:
+            dest_dir = Path(download_dir) if download_dir else Path.home() / "Downloads"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            path = await paperless.download_document(selected.id, dest_dir)
+            click.echo(f"Downloaded: {path}")

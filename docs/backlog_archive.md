@@ -50,6 +50,18 @@
 
 ---
 
+## Epic 3: Paperless Document Retrieval (PC-only)
+
+**Goal:** Retrieve documents from Paperless-ngx via natural language queries from the local PC. Corvus interprets the request via LLM, searches Paperless, and delivers the result (browser or download).
+
+- [x] **S3.1** Pydantic schemas (`corvus/schemas/document_retrieval.py`) — QueryInterpretation, ResolvedSearchParams, DeliveryMethod
+- [x] **S3.2** Query interpreter executor (`corvus/executors/query_interpreter.py`) — LLM parses natural language into structured search params
+- [x] **S3.3** Retrieval router (`corvus/router/retrieval.py`) + `download_document()` + `get_document_url()` on PaperlessClient — resolves names to IDs, builds filter params, searches via existing `list_documents()`
+- [x] **S3.4** CLI `corvus fetch` command — interpret → search → interactive selection → deliver (browser or download)
+- [x] **S3.5** Tests — 8 query interpreter tests, 24 retrieval router tests, 13 CLI fetch tests (45 new total)
+
+---
+
 ## Epic 4: Local Scan Folder Watchdog
 
 **Goal:** Monitor a local folder on the main PC for new scanned documents and automatically move them to the Paperless-ngx intake (consume) directory.
