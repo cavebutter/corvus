@@ -351,6 +351,88 @@ def test_review_reject(runner, tmp_path, monkeypatch):
     assert "Rejected: 1" in result.output
 
 
+def test_review_edit_adds_tags(runner, tmp_path, monkeypatch):
+    """Review edit option prompts for tags and applies them."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.QUEUE_DB_PATH", str(tmp_path / "queue.db"))
+    monkeypatch.setattr("corvus.cli.AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    from corvus.queue.review import ReviewQueue
+
+    task = _make_task()
+    proposed = ProposedDocumentUpdate(document_id=1, add_tag_ids=[1, 2])
+    with ReviewQueue(tmp_path / "queue.db") as q:
+        q.add(task, proposed)
+
+    routing_result = _make_routing_result(task, applied=True, action=GateAction.AUTO_EXECUTE)
+    mock_apply = AsyncMock(return_value=routing_result)
+
+    with (
+        patch("corvus.router.tagging.apply_approved_update", mock_apply),
+        _patch_async_context(
+            "corvus.integrations.paperless.PaperlessClient", AsyncMock()
+        ),
+    ):
+        result = runner.invoke(cli, ["review"], input="e\nat&t, utilities\n")
+
+    assert result.exit_code == 0
+    assert "extra tags" in result.output
+    assert "at&t" in result.output
+    assert "Approved: 1" in result.output
+
+    # Verify apply_approved_update was called with extra_tag_names
+    mock_apply.assert_called_once()
+    call_kwargs = mock_apply.call_args.kwargs
+    assert call_kwargs["extra_tag_names"] == ["at&t", "utilities"]
+
+    # Verify queue item marked as modified
+    with ReviewQueue(tmp_path / "queue.db") as q:
+        items = q.list_all()
+        assert items[0].status == ReviewStatus.MODIFIED
+        assert "at&t" in items[0].reviewer_notes
+
+
+def test_review_edit_empty_tags_approves_normally(runner, tmp_path, monkeypatch):
+    """Edit with empty tag input falls back to normal approve."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.QUEUE_DB_PATH", str(tmp_path / "queue.db"))
+    monkeypatch.setattr("corvus.cli.AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    from corvus.queue.review import ReviewQueue
+
+    task = _make_task()
+    proposed = ProposedDocumentUpdate(document_id=1, add_tag_ids=[1, 2])
+    with ReviewQueue(tmp_path / "queue.db") as q:
+        q.add(task, proposed)
+
+    routing_result = _make_routing_result(task, applied=True, action=GateAction.AUTO_EXECUTE)
+    mock_apply = AsyncMock(return_value=routing_result)
+
+    with (
+        patch("corvus.router.tagging.apply_approved_update", mock_apply),
+        _patch_async_context(
+            "corvus.integrations.paperless.PaperlessClient", AsyncMock()
+        ),
+    ):
+        result = runner.invoke(cli, ["review"], input="e\n\n")
+
+    assert result.exit_code == 0
+    assert "no tags entered" in result.output
+    assert "Approved and applied" in result.output
+
+    # Verify apply_approved_update was called without extra_tag_names
+    mock_apply.assert_called_once()
+    call_kwargs = mock_apply.call_args.kwargs
+    assert call_kwargs["extra_tag_names"] is None
+
+    # Verify queue item marked as approved (not modified)
+    with ReviewQueue(tmp_path / "queue.db") as q:
+        items = q.list_all()
+        assert items[0].status == ReviewStatus.APPROVED
+
+
 def test_review_skip_and_quit(runner, tmp_path, monkeypatch):
     """Review command supports skip and quit."""
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")

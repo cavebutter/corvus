@@ -4,6 +4,64 @@
 
 ---
 
+## Session: 2026-02-23 (session 5)
+
+### What was done
+- Completed Epic 4: Local Scan Folder Watchdog (9 stories: S4.1–S4.9)
+- `pyproject.toml`: Added `watchdog>=6.0` dependency
+- `corvus/schemas/watchdog.py` (new): `WatchdogEvent`, `TransferMethod`, `TransferStatus` Pydantic models
+- `corvus/config.py`: Added 6 watchdog config variables (`WATCHDOG_SCAN_DIR`, `WATCHDOG_TRANSFER_METHOD`, `WATCHDOG_CONSUME_DIR`, `WATCHDOG_FILE_PATTERNS`, `WATCHDOG_AUDIT_LOG_PATH`, `WATCHDOG_HASH_DB_PATH`)
+- `corvus/integrations/paperless.py`: Added `upload_document(file_path, *, title=None) -> str` using httpx multipart POST to `/api/documents/post_document/`
+- `corvus/watchdog/` (new package):
+  - `hash_store.py`: SQLite-backed SHA-256 duplicate tracker with WAL journal mode
+  - `transfer.py`: `compute_file_hash()`, `transfer_by_move()` (with name collision handling), `transfer_by_upload()`, `process_file()` (orchestrates hash→dedup→transfer→audit)
+  - `audit.py`: Separate JSONL audit log for watchdog events (different shape from tagging audit)
+  - `watcher.py`: `ScanFolderHandler` (FileSystemEventHandler) with `on_closed`/`on_created`, debounce, pattern matching; `scan_existing()` for --once mode; `watch_folder()` for continuous monitoring
+- `corvus/cli.py`: Added `corvus watch` command with `--scan-dir`, `--method`, `--consume-dir`, `--patterns`, `--once` options + `_validate_watchdog_config()`
+- Tests (4 new files, 43 new tests):
+  - `test_hash_store.py` — 11 tests (CRUD, persistence, dedup)
+  - `test_watchdog_transfer.py` — 14 tests (hashing, move, upload, process_file with both methods, dedup, error handling)
+  - `test_watchdog_audit.py` — 13 tests (JSONL read/write, filtering by since/status/limit, edge cases)
+  - `test_watchdog_cli.py` — 5 tests (help, validation, --once with real file operations, dedup on second run)
+
+### Current state
+- **Epic 1:** Complete
+- **Epic 2:** Complete
+- **Epic 4:** Complete (scan folder watchdog)
+- **Epic 5:** Complete (CLI entry point)
+- **Epic 3:** Backlogged
+- **All tests passing:** 128 total (124 fast, 4 slow/live)
+- **Test breakdown:**
+  - `test_cli.py` — 14 (all unit, mocked)
+  - `test_paperless_client.py` — 4
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 11
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 13
+  - `test_watchdog_cli.py` — 5
+
+### Key design decisions
+- Separate JSONL audit log for watchdog events (different shape from tagging audit)
+- `on_closed` + `on_created` as dual file detection triggers, with 2s debounce
+- SHA-256 hash-based dedup in SQLite prevents re-upload on restart
+- `--once` mode scans existing files and exits (useful for catch-up)
+- Observer runs in background thread, schedules async `process_file` on event loop
+- `transfer_by_move` appends `_1`, `_2`, etc. on name collision
+- Paperless upload returns task UUID as plain text (`response.text.strip()`)
+
+### Next steps
+- Smoke test `corvus watch --once` against real scan directory + Paperless
+- Consider Epic 3 (document retrieval) or Phase 2 (tiered architecture)
+- Consider systemd service for always-on watchdog monitoring
+
+---
+
 ## Session: 2026-02-23 (session 4)
 
 ### What was done

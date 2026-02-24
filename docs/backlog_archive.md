@@ -46,3 +46,20 @@
 - [x] **S5.7** Implement `corvus digest` — show activity summary
 - [x] **S5.8** Implement `corvus status` — quick queue/activity overview
 - [x] **S5.9** CLI tests (14 tests using Click CliRunner with mocked services)
+- [x] **S5.10** Add `[e]dit` option to `corvus review` — user can add extra tags before approving; uses `ReviewStatus.MODIFIED`; 2 new tests
+
+---
+
+## Epic 4: Local Scan Folder Watchdog
+
+**Goal:** Monitor a local folder on the main PC for new scanned documents and automatically move them to the Paperless-ngx intake (consume) directory.
+
+- [x] **S4.1** Pydantic schemas (`corvus/schemas/watchdog.py`) — WatchdogEvent, TransferMethod, TransferStatus
+- [x] **S4.2** Config variables in `corvus/config.py` + `secrets/internal.env`
+- [x] **S4.3** `upload_document()` on PaperlessClient (httpx multipart POST)
+- [x] **S4.4** SHA-256 hash store for duplicate detection (`corvus/watchdog/hash_store.py`)
+- [x] **S4.5** File transfer logic — hash, dedup, move/upload (`corvus/watchdog/transfer.py`)
+- [x] **S4.6** Watchdog audit logger — JSONL (`corvus/watchdog/audit.py`)
+- [x] **S4.7** Filesystem watcher using `watchdog` library (`corvus/watchdog/watcher.py`)
+- [x] **S4.8** CLI command `corvus watch` with `--once` flag
+- [x] **S4.9** Tests — 43 new tests (hash store, transfer, audit, CLI)

@@ -19,6 +19,12 @@ from corvus.config import (
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
     QUEUE_DB_PATH,
+    WATCHDOG_AUDIT_LOG_PATH,
+    WATCHDOG_CONSUME_DIR,
+    WATCHDOG_FILE_PATTERNS,
+    WATCHDOG_HASH_DB_PATH,
+    WATCHDOG_SCAN_DIR,
+    WATCHDOG_TRANSFER_METHOD,
 )
 
 logger = logging.getLogger("corvus")
@@ -245,16 +251,41 @@ async def _review_async() -> None:
 
                 choice = click.prompt(
                     "  Action",
-                    type=click.Choice(["a", "r", "s", "q"], case_sensitive=False),
-                    prompt_suffix=" [a]pprove / [r]eject / [s]kip / [q]uit: ",
+                    type=click.Choice(["a", "e", "r", "s", "q"], case_sensitive=False),
+                    prompt_suffix=" [a]pprove / [e]dit / [r]eject / [s]kip / [q]uit: ",
                 )
 
-                if choice == "a":
+                if choice in ("a", "e"):
+                    extra_tag_names: list[str] = []
+                    if choice == "e":
+                        raw = click.prompt(
+                            "  Add tags (comma-separated)", default="", show_default=False
+                        )
+                        extra_tag_names = [
+                            t.strip() for t in raw.split(",") if t.strip()
+                        ]
+                        if not extra_tag_names:
+                            click.echo("  (no tags entered, approving as-is)")
+
                     try:
-                        result = await apply_approved_update(item, paperless=paperless)
-                        review_queue.approve(item.id, notes="Approved via CLI")
+                        result = await apply_approved_update(
+                            item,
+                            paperless=paperless,
+                            extra_tag_names=extra_tag_names or None,
+                        )
+                        if extra_tag_names:
+                            notes = f"Modified via CLI; added tags: {extra_tag_names}"
+                            review_queue.modify(item.id, notes=notes)
+                        else:
+                            notes = "Approved via CLI"
+                            review_queue.approve(item.id, notes=notes)
                         audit_log.log_review_approved(item.task, result.proposed_update)
-                        click.echo("  -> Approved and applied to Paperless.")
+                        if extra_tag_names:
+                            click.echo(
+                                f"  -> Approved with extra tags {extra_tag_names} and applied to Paperless."
+                            )
+                        else:
+                            click.echo("  -> Approved and applied to Paperless.")
                         approved += 1
                     except Exception:
                         logger.exception("Error applying update for document %d", task.document_id)
@@ -321,3 +352,132 @@ def status() -> None:
         click.echo(f"  Pending review:     {pending_count}")
         click.echo(f"  Processed (24h):    {processed}")
         click.echo(f"  Reviewed (24h):     {reviewed}")
+
+
+# ------------------------------------------------------------------
+# corvus watch
+# ------------------------------------------------------------------
+
+
+def _validate_watchdog_config(
+    scan_dir: str, method: str, consume_dir: str
+) -> None:
+    """Fail loudly if watchdog config is invalid."""
+    from pathlib import Path
+
+    if not scan_dir:
+        click.echo("Error: --scan-dir is required (or set WATCHDOG_SCAN_DIR).", err=True)
+        sys.exit(1)
+    if not Path(scan_dir).is_dir():
+        click.echo(f"Error: Scan directory does not exist: {scan_dir}", err=True)
+        sys.exit(1)
+    if method == "move":
+        if not consume_dir:
+            click.echo(
+                "Error: --consume-dir is required for move method (or set WATCHDOG_CONSUME_DIR).",
+                err=True,
+            )
+            sys.exit(1)
+        if not Path(consume_dir).is_dir():
+            click.echo(f"Error: Consume directory does not exist: {consume_dir}", err=True)
+            sys.exit(1)
+    elif method == "upload":
+        missing_creds = (
+            not PAPERLESS_BASE_URL
+            or not PAPERLESS_API_TOKEN
+            or PAPERLESS_API_TOKEN == "placeholder"
+        )
+        if missing_creds:
+            click.echo(
+                "Error: PAPERLESS_BASE_URL and PAPERLESS_API_TOKEN required for upload method.",
+                err=True,
+            )
+            sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--scan-dir",
+    default=WATCHDOG_SCAN_DIR,
+    show_default=True,
+    help="Directory to watch for new files.",
+)
+@click.option(
+    "--method",
+    type=click.Choice(["move", "upload"], case_sensitive=False),
+    default=WATCHDOG_TRANSFER_METHOD,
+    show_default=True,
+    help="Transfer method: move to consume dir or upload via API.",
+)
+@click.option(
+    "--consume-dir",
+    default=WATCHDOG_CONSUME_DIR,
+    show_default=True,
+    help="Paperless consume directory (required for move method).",
+)
+@click.option(
+    "--patterns",
+    default=WATCHDOG_FILE_PATTERNS,
+    show_default=True,
+    help="Comma-separated file patterns to watch (e.g. '*.pdf,*.png').",
+)
+@click.option("--once", is_flag=True, help="Scan existing files and exit (no continuous watch).")
+def watch(scan_dir: str, method: str, consume_dir: str, patterns: str, once: bool) -> None:
+    """Watch a scan folder and transfer new files to Paperless-ngx."""
+    _validate_watchdog_config(scan_dir, method, consume_dir)
+    asyncio.run(_watch_async(scan_dir, method, consume_dir, patterns, once))
+
+
+async def _watch_async(
+    scan_dir: str, method: str, consume_dir: str, patterns: str, once: bool
+) -> None:
+    from pathlib import Path
+
+    from corvus.schemas.watchdog import TransferMethod
+    from corvus.watchdog.audit import WatchdogAuditLog
+    from corvus.watchdog.hash_store import HashStore
+    from corvus.watchdog.watcher import scan_existing, watch_folder
+
+    scan_path = Path(scan_dir)
+    file_patterns = [p.strip() for p in patterns.split(",") if p.strip()]
+    transfer_method = TransferMethod(method)
+    consume_path = Path(consume_dir) if consume_dir else None
+
+    audit_log = WatchdogAuditLog(WATCHDOG_AUDIT_LOG_PATH)
+
+    with HashStore(WATCHDOG_HASH_DB_PATH) as hash_store:
+        paperless_client = None
+        try:
+            if transfer_method == TransferMethod.UPLOAD:
+                from corvus.integrations.paperless import PaperlessClient
+
+                paperless_client = PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN)
+
+            kwargs = dict(
+                method=transfer_method,
+                hash_store=hash_store,
+                audit_log=audit_log,
+                file_patterns=file_patterns,
+                consume_dir=consume_path,
+                paperless_client=paperless_client,
+            )
+
+            if once:
+                click.echo(f"Scanning {scan_path} (once mode)…")
+                results = await scan_existing(scan_path, **kwargs)
+                success = sum(1 for r in results if r.transfer_status.value == "success")
+                dupes = sum(1 for r in results if r.transfer_status.value == "duplicate")
+                errors = sum(1 for r in results if r.transfer_status.value == "error")
+                click.echo(
+                    f"Done. Files: {len(results)}, "
+                    f"Transferred: {success}, Duplicates: {dupes}, Errors: {errors}"
+                )
+            else:
+                click.echo(f"Watching {scan_path} for new files (Ctrl+C to stop)…")
+                click.echo(f"  Method: {transfer_method.value}")
+                click.echo(f"  Patterns: {file_patterns}")
+                await watch_folder(scan_path, **kwargs)
+
+        finally:
+            if paperless_client:
+                await paperless_client.close()

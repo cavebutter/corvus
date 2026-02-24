@@ -1,6 +1,7 @@
 """Async client for the Paperless-ngx REST API."""
 
 import logging
+from pathlib import Path
 
 import httpx
 
@@ -113,6 +114,38 @@ class PaperlessClient:
         """Fetch a single document by ID."""
         data = await self._get(f"/api/documents/{doc_id}/")
         return PaperlessDocument.model_validate(data)
+
+    async def upload_document(
+        self,
+        file_path: str | Path,
+        *,
+        title: str | None = None,
+    ) -> str:
+        """Upload a document to Paperless-ngx for ingestion.
+
+        Uses ``POST /api/documents/post_document/`` with multipart form data.
+        Paperless returns the task UUID as plain text on success.
+
+        Args:
+            file_path: Path to the file to upload.
+            title: Optional title override. Defaults to the filename.
+
+        Returns:
+            The Paperless task UUID (string).
+        """
+        path = Path(file_path)
+        data = {}
+        if title:
+            data["title"] = title
+
+        with path.open("rb") as f:
+            response = await self._client.post(
+                "/api/documents/post_document/",
+                data=data,
+                files={"document": (path.name, f, "application/octet-stream")},
+            )
+        response.raise_for_status()
+        return response.text.strip()
 
     async def update_document(self, doc_id: int, payload: dict) -> PaperlessDocument:
         """PATCH a document. Only include fields you want to change.

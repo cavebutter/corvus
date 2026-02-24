@@ -166,6 +166,14 @@ class ReviewQueue:
         """
         return self._set_status(item_id, ReviewStatus.REJECTED, notes)
 
+    def modify(self, item_id: str, *, notes: str | None = None) -> ReviewQueueItem:
+        """Mark an item as modified (approved with user edits).
+
+        Raises:
+            ValueError: If the item doesn't exist or isn't pending.
+        """
+        return self._set_status(item_id, ReviewStatus.MODIFIED, notes)
+
     def count_pending(self) -> int:
         """Return the number of items awaiting review."""
         row = self._conn.execute(

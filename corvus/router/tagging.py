@@ -239,6 +239,7 @@ async def apply_approved_update(
     item: "ReviewQueueItem",
     *,
     paperless: PaperlessClient,
+    extra_tag_names: list[str] | None = None,
 ) -> RoutingResult:
     """Apply a previously-reviewed queue item to Paperless.
 
@@ -249,17 +250,36 @@ async def apply_approved_update(
     Args:
         item: The approved ReviewQueueItem.
         paperless: An open PaperlessClient.
+        extra_tag_names: Additional tag names to apply (user-added during review).
 
     Returns:
         RoutingResult with applied=True on success.
     """
-    doc = await paperless.get_document(item.task.document_id)
+    task = item.task
+    if extra_tag_names:
+        from corvus.schemas.document_tagging import TagSuggestion
+
+        extra_suggestions = [
+            TagSuggestion(tag_name=name, confidence=1.0) for name in extra_tag_names
+        ]
+        task = task.model_copy(
+            update={
+                "result": task.result.model_copy(
+                    update={
+                        "suggested_tags": list(task.result.suggested_tags)
+                        + extra_suggestions,
+                    }
+                )
+            }
+        )
+
+    doc = await paperless.get_document(task.document_id)
     tags = await paperless.list_tags()
     correspondents = await paperless.list_correspondents()
     document_types = await paperless.list_document_types()
 
     return await resolve_and_route(
-        item.task,
+        task,
         paperless=paperless,
         tags=tags,
         correspondents=correspondents,

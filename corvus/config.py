@@ -33,6 +33,20 @@ OLLAMA_BASE_URL: str = _internal.get("OLLAMA_BASE_URL", "http://localhost:11434"
 QUEUE_DB_PATH: str = _internal.get("QUEUE_DB_PATH", str(PROJECT_ROOT / "data" / "queue.db"))
 AUDIT_LOG_PATH: str = _internal.get("AUDIT_LOG_PATH", str(PROJECT_ROOT / "data" / "audit.log"))
 
+# --- Watchdog (scan folder → Paperless intake) ---
+WATCHDOG_SCAN_DIR: str = _internal.get("WATCHDOG_SCAN_DIR", "")
+WATCHDOG_TRANSFER_METHOD: str = _internal.get("WATCHDOG_TRANSFER_METHOD", "upload")
+WATCHDOG_CONSUME_DIR: str = _internal.get("WATCHDOG_CONSUME_DIR", "")
+WATCHDOG_FILE_PATTERNS: str = _internal.get(
+    "WATCHDOG_FILE_PATTERNS", "*.pdf,*.png,*.jpg,*.jpeg,*.tiff,*.tif"
+)
+WATCHDOG_AUDIT_LOG_PATH: str = _internal.get(
+    "WATCHDOG_AUDIT_LOG_PATH", str(PROJECT_ROOT / "data" / "watchdog_audit.log")
+)
+WATCHDOG_HASH_DB_PATH: str = _internal.get(
+    "WATCHDOG_HASH_DB_PATH", str(PROJECT_ROOT / "data" / "watchdog_hashes.db")
+)
+
 
 def load_external() -> dict[str, str | None]:
     """Load external secrets on demand. Only call when needed (Phase 3+)."""
