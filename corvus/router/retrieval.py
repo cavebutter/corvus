@@ -182,21 +182,31 @@ async def resolve_and_search(
     )
     if total == 0 and has_structured_filters:
         # Fallback 1: per-tag search (broadens AND → individual tag lookups)
+        # Try ALL tags and pick the smallest (most specific) non-empty result set.
         if params.tag_ids:
+            best_docs: list[PaperlessDocument] | None = None
+            best_total: int = 0
+            best_tag_id: int = 0
             for tag_id in params.tag_ids:
                 tag_filters = {"tags__id__all": str(tag_id)}
-                docs, total = await paperless.list_documents(
+                tag_docs, tag_total = await paperless.list_documents(
                     page_size=page_size,
                     ordering=ordering,
                     filter_params=tag_filters,
                 )
-                if total > 0:
-                    params.used_fallback = True
-                    logger.info(
-                        "Tag fallback (tag_id=%d) returned %d documents (total=%d)",
-                        tag_id, len(docs), total,
-                    )
-                    break
+                if tag_total > 0 and (best_docs is None or tag_total < best_total):
+                    best_docs = tag_docs
+                    best_total = tag_total
+                    best_tag_id = tag_id
+
+            if best_docs is not None:
+                docs = best_docs
+                total = best_total
+                params.used_fallback = True
+                logger.info(
+                    "Tag fallback (tag_id=%d) returned %d documents (total=%d) — most specific",
+                    best_tag_id, len(docs), total,
+                )
 
         # Fallback 2: text-only search (drop all structured filters)
         if total == 0 and params.text_search:

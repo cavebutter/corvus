@@ -348,9 +348,11 @@ class TestResolveAndSearch:
         mock_paperless = AsyncMock()
         # Call 1: full structured (tags AND + text) → 0
         # Call 2: per-tag fallback (tag_id=1) → results
+        # Call 3: per-tag fallback (tag_id=2) → 0 (tries all tags)
         mock_paperless.list_documents.side_effect = [
             ([], 0),
             (tag_docs, 1),
+            ([], 0),
         ]
 
         params, results, total = await resolve_and_search(
@@ -364,11 +366,13 @@ class TestResolveAndSearch:
         assert params.used_fallback is True
         assert total == 1
         assert results[0].title == "Tax Return 2022"
-        assert mock_paperless.list_documents.call_count == 2
+        assert mock_paperless.list_documents.call_count == 3
 
-        # Verify per-tag call used single tag filter
-        tag_call_kwargs = mock_paperless.list_documents.call_args_list[1].kwargs
-        assert tag_call_kwargs["filter_params"] == {"tags__id__all": "1"}
+        # Verify per-tag calls used single tag filters
+        tag1_kwargs = mock_paperless.list_documents.call_args_list[1].kwargs
+        assert tag1_kwargs["filter_params"] == {"tags__id__all": "1"}
+        tag2_kwargs = mock_paperless.list_documents.call_args_list[2].kwargs
+        assert tag2_kwargs["filter_params"] == {"tags__id__all": "2"}
 
     async def test_fallback_per_tag_tries_second_tag(self):
         """First tag returns 0, second tag finds results."""
@@ -403,6 +407,38 @@ class TestResolveAndSearch:
         # Verify third call used second tag
         third_call_kwargs = mock_paperless.list_documents.call_args_list[2].kwargs
         assert third_call_kwargs["filter_params"] == {"tags__id__all": "2"}
+
+    async def test_fallback_per_tag_picks_smallest_result_set(self):
+        """Multiple tags return results → picks the most specific (smallest total)."""
+        interp = _make_interpretation(
+            tag_names=["invoice", "utility-bill"],
+            text_search="fy2022 taxes",
+        )
+        broad_docs = [_make_document(i, f"Broad Doc {i}") for i in range(5)]
+        specific_docs = [_make_document(20, "Specific Match")]
+
+        mock_paperless = AsyncMock()
+        # Call 1: full structured → 0
+        # Call 2: tag_id=1 → 14 results (broad)
+        # Call 3: tag_id=2 → 3 results (specific — should be picked)
+        mock_paperless.list_documents.side_effect = [
+            ([], 0),
+            (broad_docs, 14),
+            (specific_docs, 3),
+        ]
+
+        params, results, total = await resolve_and_search(
+            interp,
+            paperless=mock_paperless,
+            tags=SAMPLE_TAGS,
+            correspondents=SAMPLE_CORRESPONDENTS,
+            document_types=SAMPLE_DOC_TYPES,
+        )
+
+        assert params.used_fallback is True
+        assert total == 3
+        assert results == specific_docs
+        assert mock_paperless.list_documents.call_count == 3
 
     async def test_fallback_to_text_after_tags_exhausted(self):
         """Per-tag fallback returns 0 for all tags → text-only fallback finds results."""
