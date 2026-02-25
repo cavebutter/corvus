@@ -75,3 +75,15 @@
 - [x] **S4.7** Filesystem watcher using `watchdog` library (`corvus/watchdog/watcher.py`)
 - [x] **S4.8** CLI command `corvus watch` with `--once` flag
 - [x] **S4.9** Tests — 43 new tests (hash store, transfer, audit, CLI)
+
+---
+
+## Epic 6: Orchestrator Architecture (Phase 2)
+
+**Goal:** Introduce the Planner/Orchestrator tier — an LLM intent classifier + deterministic dispatch router that enables natural language intake across all pipelines. Foundation for future voice, email, and web interfaces.
+
+- [x] **S6.1** Orchestrator schemas (`corvus/schemas/orchestrator.py`) — Intent enum (7 intents), IntentClassification (flat model with per-intent params), pipeline result models (TagPipelineResult, FetchPipelineResult, StatusResult, DigestResult), OrchestratorAction, OrchestratorResponse
+- [x] **S6.2** Intent classifier executor (`corvus/planner/intent_classifier.py`) — stateless async `classify_intent()`, calls Ollama with JSON schema constraint, returns (IntentClassification, OllamaResponse); 11 tests
+- [x] **S6.3** Pipeline handlers + CLI refactor (`corvus/orchestrator/pipelines.py`) — extracted `run_tag_pipeline()`, `run_fetch_pipeline()`, `run_status_pipeline()`, `run_digest_pipeline()` from CLI; CLI commands now call handlers with `on_progress=click.echo`; 13 tests
+- [x] **S6.4** Orchestrator router + `OllamaClient.chat()` (`corvus/orchestrator/router.py`, `corvus/integrations/ollama.py`) — deterministic `dispatch()` function: confidence gate (< 0.7 → clarify), interactive-required for review/watch, pipeline dispatch for tag/fetch/status/digest, free-form chat for general conversation; 11 tests
+- [x] **S6.5** CLI: `corvus ask` + `corvus chat` commands — `ask` for single NL query (classify → dispatch → render), `chat` for interactive REPL (stateless per turn); shared `_render_orchestrator_response()` helper; 13 new CLI tests

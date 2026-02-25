@@ -103,10 +103,12 @@ class PaperlessClient:
         params: dict = {"page": page, "page_size": page_size, "ordering": ordering}
         if filter_params:
             params.update(filter_params)
-        data = await self._get(
-            "/api/documents/",
-            params=params,
-        )
+        response = await self._client.get("/api/documents/", params=params)
+        # Paperless returns 404 for pages beyond the last — treat as empty.
+        if response.status_code == 404:
+            return [], 0
+        response.raise_for_status()
+        data = response.json()
         docs = [PaperlessDocument.model_validate(r) for r in data["results"]]
         return docs, data["count"]
 

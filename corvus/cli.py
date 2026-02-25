@@ -1,10 +1,14 @@
-"""CLI entry point for the Corvus document tagging pipeline.
+"""CLI entry point for the Corvus document management system.
 
 Commands:
     corvus tag      — batch-tag documents via LLM
     corvus review   — interactively review pending items
     corvus digest   — show activity digest
     corvus status   — quick overview of queue and recent activity
+    corvus watch    — watch a scan folder and transfer files to Paperless
+    corvus fetch    — retrieve a document via natural language
+    corvus ask      — single natural language query to the orchestrator
+    corvus chat     — interactive REPL with the orchestrator
 """
 
 import asyncio
@@ -46,13 +50,30 @@ def _validate_config() -> None:
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging.")
 def cli(verbose: bool) -> None:
-    """Corvus — local document tagging pipeline for Paperless-ngx."""
+    """Corvus — local AI agent system for Paperless-ngx."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+# ------------------------------------------------------------------
+# Shared helpers for model resolution
+# ------------------------------------------------------------------
+
+
+async def _resolve_model(ollama, model: str | None) -> str:
+    """Auto-detect model if not specified. Exits on failure."""
+    if model is not None:
+        return model
+    resolved = await ollama.pick_instruct_model()
+    if resolved is None:
+        click.echo("Error: No models available on Ollama server.", err=True)
+        sys.exit(1)
+    click.echo(f"Auto-selected model: {resolved}")
+    return resolved
 
 
 # ------------------------------------------------------------------
@@ -84,122 +105,28 @@ async def _tag_async(
     keep_alive: str,
     force_queue: bool,
 ) -> None:
-    from corvus.audit.logger import AuditLog
-    from corvus.executors.document_tagger import tag_document
     from corvus.integrations.ollama import OllamaClient
     from corvus.integrations.paperless import PaperlessClient
-    from corvus.queue.review import ReviewQueue
-    from corvus.router.tagging import resolve_and_route
-    from corvus.schemas.document_tagging import GateAction
-
-    audit_log = AuditLog(AUDIT_LOG_PATH)
+    from corvus.orchestrator.pipelines import run_tag_pipeline
 
     async with (
         PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
         OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
     ):
-        # --- Resolve model ---
-        if model is None:
-            model = await ollama.pick_instruct_model()
-            if model is None:
-                click.echo("Error: No models available on Ollama server.", err=True)
-                sys.exit(1)
-            click.echo(f"Auto-selected model: {model}")
+        model = await _resolve_model(ollama, model)
 
-        # --- Fetch metadata for LLM context ---
-        tags = await paperless.list_tags()
-        correspondents = await paperless.list_correspondents()
-        doc_types = await paperless.list_document_types()
-
-        # --- Fetch documents page by page ---
-        filter_params = None if include_tagged else {"tags__isnull": True}
-        page = 1
-        page_size = 25
-        processed = 0
-        errors = 0
-        total_count: int | None = None
-
-        with ReviewQueue(QUEUE_DB_PATH) as review_queue:
-            while True:
-                docs, count = await paperless.list_documents(
-                    page=page,
-                    page_size=page_size,
-                    filter_params=filter_params,
-                )
-                if total_count is None:
-                    total_count = count
-                    if total_count == 0:
-                        click.echo("No documents to process.")
-                        return
-                    effective_limit = limit if limit > 0 else total_count
-                    click.echo(f"Found {total_count} document(s). Processing up to {effective_limit}.")
-
-                if not docs:
-                    break
-
-                for doc in docs:
-                    if limit > 0 and (processed + errors) >= limit:
-                        break
-
-                    try:
-                        click.echo(f"\n[{processed + errors + 1}] {doc.title} (id={doc.id})")
-
-                        task, _raw = await tag_document(
-                            doc,
-                            ollama=ollama,
-                            model=model,
-                            tags=tags,
-                            correspondents=correspondents,
-                            document_types=doc_types,
-                            keep_alive=keep_alive,
-                        )
-
-                        routing_result = await resolve_and_route(
-                            task,
-                            paperless=paperless,
-                            tags=tags,
-                            correspondents=correspondents,
-                            document_types=doc_types,
-                            existing_doc_tag_ids=doc.tags,
-                            force_queue=force_queue,
-                        )
-
-                        # Queue or audit based on routing
-                        if routing_result.effective_action == GateAction.QUEUE_FOR_REVIEW:
-                            review_queue.add(routing_result.task, routing_result.proposed_update)
-                            audit_log.log_queued_for_review(
-                                routing_result.task, routing_result.proposed_update
-                            )
-                        elif routing_result.applied:
-                            audit_log.log_auto_applied(
-                                routing_result.task, routing_result.proposed_update
-                            )
-
-                        # Summary line
-                        tag_names = [t.tag_name for t in task.result.suggested_tags]
-                        click.echo(
-                            f"  confidence={task.overall_confidence:.0%} "
-                            f"gate={routing_result.effective_action.value} "
-                            f"tags={tag_names}"
-                        )
-                        if task.result.suggested_correspondent:
-                            click.echo(f"  correspondent={task.result.suggested_correspondent}")
-                        if task.result.suggested_document_type:
-                            click.echo(f"  type={task.result.suggested_document_type}")
-
-                        processed += 1
-
-                    except Exception:
-                        errors += 1
-                        logger.exception("Error processing document %d: %s", doc.id, doc.title)
-                        click.echo("  ERROR: Failed to process (see log for details)", err=True)
-
-                if limit > 0 and (processed + errors) >= limit:
-                    break
-                page += 1
-
-        # --- Summary ---
-        click.echo(f"\nDone. Processed: {processed}, Errors: {errors}")
+        await run_tag_pipeline(
+            paperless=paperless,
+            ollama=ollama,
+            model=model,
+            limit=limit,
+            include_tagged=include_tagged,
+            keep_alive=keep_alive,
+            force_queue=force_queue,
+            queue_db_path=QUEUE_DB_PATH,
+            audit_log_path=AUDIT_LOG_PATH,
+            on_progress=click.echo,
+        )
 
 
 # ------------------------------------------------------------------
@@ -315,14 +242,14 @@ async def _review_async() -> None:
 @click.option("--hours", default=24, show_default=True, help="Lookback period in hours.")
 def digest(hours: int) -> None:
     """Show activity digest for the recent period."""
-    from corvus.audit.logger import AuditLog
-    from corvus.digest.daily import generate_digest, render_text
-    from corvus.queue.review import ReviewQueue
+    from corvus.orchestrator.pipelines import run_digest_pipeline
 
-    audit_log = AuditLog(AUDIT_LOG_PATH)
-    with ReviewQueue(QUEUE_DB_PATH) as review_queue:
-        d = generate_digest(audit_log, review_queue, hours=hours)
-        click.echo(render_text(d))
+    result = run_digest_pipeline(
+        queue_db_path=QUEUE_DB_PATH,
+        audit_log_path=AUDIT_LOG_PATH,
+        hours=hours,
+    )
+    click.echo(result.rendered_text)
 
 
 # ------------------------------------------------------------------
@@ -333,25 +260,16 @@ def digest(hours: int) -> None:
 @cli.command()
 def status() -> None:
     """Quick overview of queue and recent activity."""
-    from datetime import UTC, datetime, timedelta
+    from corvus.orchestrator.pipelines import run_status_pipeline
 
-    from corvus.audit.logger import AuditLog
-    from corvus.queue.review import ReviewQueue
-
-    audit_log = AuditLog(AUDIT_LOG_PATH)
-    with ReviewQueue(QUEUE_DB_PATH) as review_queue:
-        pending_count = review_queue.count_pending()
-
-        since = datetime.now(UTC) - timedelta(hours=24)
-        entries = audit_log.read_entries(since=since)
-
-        processed = sum(1 for e in entries if e.action in ("auto_applied", "queued_for_review"))
-        reviewed = sum(1 for e in entries if e.action in ("review_approved", "review_rejected"))
-
-        click.echo("Corvus Status")
-        click.echo(f"  Pending review:     {pending_count}")
-        click.echo(f"  Processed (24h):    {processed}")
-        click.echo(f"  Reviewed (24h):     {reviewed}")
+    result = run_status_pipeline(
+        queue_db_path=QUEUE_DB_PATH,
+        audit_log_path=AUDIT_LOG_PATH,
+    )
+    click.echo("Corvus Status")
+    click.echo(f"  Pending review:     {result.pending_count}")
+    click.echo(f"  Processed (24h):    {result.processed_24h}")
+    click.echo(f"  Reviewed (24h):     {result.reviewed_24h}")
 
 
 # ------------------------------------------------------------------
@@ -530,10 +448,9 @@ async def _fetch_async(
     import webbrowser
     from pathlib import Path
 
-    from corvus.executors.query_interpreter import interpret_query
     from corvus.integrations.ollama import OllamaClient
     from corvus.integrations.paperless import PaperlessClient
-    from corvus.router.retrieval import resolve_and_search
+    from corvus.orchestrator.pipelines import run_fetch_pipeline
     from corvus.schemas.document_retrieval import DeliveryMethod
 
     delivery = DeliveryMethod(method)
@@ -542,91 +459,43 @@ async def _fetch_async(
         PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
         OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
     ):
-        # --- Resolve model ---
-        if model is None:
-            model = await ollama.pick_instruct_model()
-            if model is None:
-                click.echo("Error: No models available on Ollama server.", err=True)
-                sys.exit(1)
-            click.echo(f"Auto-selected model: {model}")
+        model = await _resolve_model(ollama, model)
 
-        # --- Fetch metadata for LLM context ---
-        tags = await paperless.list_tags()
-        correspondents = await paperless.list_correspondents()
-        doc_types = await paperless.list_document_types()
-
-        # --- Step 1: Interpret query via LLM ---
-        click.echo(f"\nInterpreting: \"{query}\"")
-        interpretation, _raw = await interpret_query(
-            query,
+        result = await run_fetch_pipeline(
+            paperless=paperless,
             ollama=ollama,
             model=model,
-            tags=tags,
-            correspondents=correspondents,
-            document_types=doc_types,
+            query=query,
             keep_alive=keep_alive,
+            on_progress=click.echo,
         )
 
-        # Display interpretation
-        click.echo(f"  Confidence: {interpretation.confidence:.0%}")
-        click.echo(f"  Reasoning: {interpretation.reasoning}")
-        if interpretation.correspondent_name:
-            click.echo(f"  Correspondent: {interpretation.correspondent_name}")
-        if interpretation.document_type_name:
-            click.echo(f"  Document type: {interpretation.document_type_name}")
-        if interpretation.tag_names:
-            click.echo(f"  Tags: {interpretation.tag_names}")
-        if interpretation.text_search:
-            click.echo(f"  Text search: {interpretation.text_search}")
-        if interpretation.date_range_start or interpretation.date_range_end:
-            click.echo(
-                f"  Date range: {interpretation.date_range_start or '...'}"
-                f" to {interpretation.date_range_end or '...'}"
-            )
-
-        # --- Low confidence check ---
-        if interpretation.confidence < 0.5 and not click.confirm(
+        # Low confidence check
+        if result.interpretation_confidence < 0.5 and not click.confirm(
             "\nLow confidence. Continue?", default=False
         ):
             click.echo("Aborted.")
             return
 
-        # --- Step 2: Resolve and search ---
-        params, docs, total = await resolve_and_search(
-            interpretation,
-            paperless=paperless,
-            tags=tags,
-            correspondents=correspondents,
-            document_types=doc_types,
-        )
-
-        # Show warnings about unresolved names
-        for warning in params.warnings:
-            click.echo(f"  Warning: {warning}")
-
-        if params.used_fallback:
-            click.echo("  Note: Structured filters returned no results; showing results from relaxed search.")
-
-        # --- Step 3: Display results and deliver ---
-        if total == 0:
+        # Display results and deliver
+        if result.documents_found == 0:
             click.echo("\nNo documents found.")
             return
 
-        click.echo(f"\nFound {total} document(s).")
+        click.echo(f"\nFound {result.documents_found} document(s).")
+        docs = result.documents
 
-        if len(docs) == 1 and total == 1:
-            # Single result — auto-deliver
+        if len(docs) == 1 and result.documents_found == 1:
             doc = docs[0]
-            click.echo(f"  1. [{doc.created[:10]}] {doc.title}  (id={doc.id})")
+            click.echo(f"  1. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
             selected = doc
         else:
-            # Multiple results — interactive selection
             display_count = min(len(docs), 10)
             for i, doc in enumerate(docs[:display_count], 1):
-                click.echo(f"  {i:>2}. [{doc.created[:10]}] {doc.title}  (id={doc.id})")
+                click.echo(f"  {i:>2}. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
 
-            if total > display_count:
-                click.echo(f"  ... and {total - display_count} more. Consider refining your query.")
+            if result.documents_found > display_count:
+                click.echo(f"  ... and {result.documents_found - display_count} more. Consider refining your query.")
 
             raw_choice = click.prompt(
                 "\nSelect", prompt_suffix=f" [1-{display_count}, q to quit]: "
@@ -644,13 +513,243 @@ async def _fetch_async(
                 click.echo("Invalid selection.", err=True)
                 sys.exit(1)
 
-        # --- Step 4: Deliver ---
+        # Deliver
         if delivery == DeliveryMethod.BROWSER:
-            url = paperless.get_document_url(selected.id)
+            url = paperless.get_document_url(selected["id"])
             click.echo(f"Opening: {url}")
             webbrowser.open(url)
         else:
             dest_dir = Path(download_dir) if download_dir else Path.home() / "Downloads"
             dest_dir.mkdir(parents=True, exist_ok=True)
-            path = await paperless.download_document(selected.id, dest_dir)
+            path = await paperless.download_document(selected["id"], dest_dir)
             click.echo(f"Downloaded: {path}")
+
+
+# ------------------------------------------------------------------
+# corvus ask
+# ------------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("query", nargs=-1, required=True)
+@click.option("--model", "-m", default=None, help="Ollama model name (auto-detected if omitted).")
+@click.option("--keep-alive", default="5m", show_default=True, help="Ollama keep_alive duration.")
+def ask(query: tuple[str, ...], model: str | None, keep_alive: str) -> None:
+    """Ask Corvus a natural language question."""
+    _validate_config()
+    query_str = " ".join(query)
+    if not query_str.strip():
+        click.echo("Error: Query cannot be empty.", err=True)
+        sys.exit(1)
+    asyncio.run(_ask_async(query_str, model, keep_alive))
+
+
+async def _ask_async(query: str, model: str | None, keep_alive: str) -> None:
+    import webbrowser
+
+    from corvus.integrations.ollama import OllamaClient
+    from corvus.integrations.paperless import PaperlessClient
+    from corvus.orchestrator.router import dispatch
+    from corvus.planner.intent_classifier import classify_intent
+    from corvus.schemas.orchestrator import OrchestratorAction
+
+    async with (
+        PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
+        OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
+    ):
+        model = await _resolve_model(ollama, model)
+
+        # Step 1: Classify intent
+        classification, _raw = await classify_intent(
+            query, ollama=ollama, model=model, keep_alive=keep_alive,
+        )
+        click.echo(f"  Intent: {classification.intent.value} ({classification.confidence:.0%})")
+
+        # Step 2: Dispatch via orchestrator router
+        try:
+            response = await dispatch(
+                classification,
+                user_input=query,
+                paperless=paperless,
+                ollama=ollama,
+                model=model,
+                keep_alive=keep_alive,
+                queue_db_path=QUEUE_DB_PATH,
+                audit_log_path=AUDIT_LOG_PATH,
+                on_progress=click.echo,
+            )
+        except Exception:
+            logger.exception("Error dispatching intent %s", classification.intent.value)
+            click.echo("\nError: Failed to complete request. See log for details.", err=True)
+            sys.exit(1)
+
+        # Step 3: Render response
+        _render_orchestrator_response(response)
+
+        # Handle interactive fetch selection if needed
+        if (
+            response.action == OrchestratorAction.DISPATCHED
+            and response.result is not None
+        ):
+            from corvus.schemas.orchestrator import FetchPipelineResult
+
+            if isinstance(response.result, FetchPipelineResult) and response.result.documents:
+                docs = response.result.documents
+                total = response.result.documents_found
+                if len(docs) == 1 and total == 1:
+                    doc = docs[0]
+                    url = paperless.get_document_url(doc["id"])
+                    click.echo(f"Opening: {url}")
+                    webbrowser.open(url)
+                elif docs:
+                    display_count = min(len(docs), 10)
+                    for i, doc in enumerate(docs[:display_count], 1):
+                        click.echo(f"  {i:>2}. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
+                    if total > display_count:
+                        click.echo(f"  ... and {total - display_count} more.")
+
+                    raw_choice = click.prompt(
+                        "\nSelect", prompt_suffix=f" [1-{display_count}, q to quit]: "
+                    )
+                    if raw_choice.strip().lower() == "q":
+                        click.echo("Aborted.")
+                        return
+
+                    try:
+                        idx = int(raw_choice) - 1
+                        if idx < 0 or idx >= display_count:
+                            raise ValueError
+                        selected = docs[idx]
+                    except (ValueError, IndexError):
+                        click.echo("Invalid selection.", err=True)
+                        return
+
+                    url = paperless.get_document_url(selected["id"])
+                    click.echo(f"Opening: {url}")
+                    webbrowser.open(url)
+
+
+def _render_orchestrator_response(response) -> None:
+    """Render an OrchestratorResponse to CLI output."""
+    from corvus.schemas.orchestrator import (
+        DigestResult,
+        FetchPipelineResult,
+        OrchestratorAction,
+        StatusResult,
+        TagPipelineResult,
+    )
+
+    if response.action == OrchestratorAction.NEEDS_CLARIFICATION:
+        click.echo(f"\n{response.message}")
+        if response.clarification_prompt:
+            click.echo(f"  Hint: {response.clarification_prompt}")
+        return
+
+    if response.action == OrchestratorAction.INTERACTIVE_REQUIRED:
+        click.echo(f"\n{response.message}")
+        return
+
+    if response.action == OrchestratorAction.CHAT_RESPONSE:
+        click.echo(f"\n{response.message}")
+        return
+
+    if response.action == OrchestratorAction.DISPATCHED and response.result is not None:
+        result = response.result
+        if isinstance(result, TagPipelineResult):
+            click.echo(
+                f"\nTagging complete. Processed: {result.processed}, "
+                f"Queued: {result.queued}, Auto-applied: {result.auto_applied}, "
+                f"Errors: {result.errors}"
+            )
+        elif isinstance(result, FetchPipelineResult):
+            click.echo(f"\nFound {result.documents_found} document(s).")
+        elif isinstance(result, StatusResult):
+            click.echo("Corvus Status")
+            click.echo(f"  Pending review:     {result.pending_count}")
+            click.echo(f"  Processed (24h):    {result.processed_24h}")
+            click.echo(f"  Reviewed (24h):     {result.reviewed_24h}")
+        elif isinstance(result, DigestResult):
+            click.echo(result.rendered_text)
+
+
+# ------------------------------------------------------------------
+# corvus chat
+# ------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--model", "-m", default=None, help="Ollama model name (auto-detected if omitted).")
+@click.option("--keep-alive", default="10m", show_default=True, help="Ollama keep_alive duration.")
+def chat(model: str | None, keep_alive: str) -> None:
+    """Interactive REPL with the Corvus orchestrator."""
+    _validate_config()
+    asyncio.run(_chat_async(model, keep_alive))
+
+
+async def _chat_async(model: str | None, keep_alive: str) -> None:
+    from corvus.integrations.ollama import OllamaClient
+    from corvus.integrations.paperless import PaperlessClient
+    from corvus.orchestrator.router import dispatch
+    from corvus.planner.intent_classifier import classify_intent
+    from corvus.schemas.orchestrator import FetchPipelineResult, OrchestratorAction
+
+    async with (
+        PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
+        OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
+    ):
+        model = await _resolve_model(ollama, model)
+
+        click.echo("Corvus interactive mode. Type 'quit' to leave.\n")
+
+        while True:
+            try:
+                user_input = click.prompt("You", prompt_suffix="> ")
+            except (EOFError, KeyboardInterrupt):
+                click.echo("\nGoodbye.")
+                break
+
+            if user_input.strip().lower() in ("quit", "exit", "q"):
+                click.echo("Goodbye.")
+                break
+
+            if not user_input.strip():
+                continue
+
+            try:
+                classification, _raw = await classify_intent(
+                    user_input, ollama=ollama, model=model, keep_alive=keep_alive,
+                )
+                click.echo(f"  Intent: {classification.intent.value} ({classification.confidence:.0%})")
+
+                response = await dispatch(
+                    classification,
+                    user_input=user_input,
+                    paperless=paperless,
+                    ollama=ollama,
+                    model=model,
+                    keep_alive=keep_alive,
+                    queue_db_path=QUEUE_DB_PATH,
+                    audit_log_path=AUDIT_LOG_PATH,
+                    on_progress=click.echo,
+                )
+
+                _render_orchestrator_response(response)
+
+                # Show fetch results inline (no interactive selection in chat mode)
+                if (
+                    response.action == OrchestratorAction.DISPATCHED
+                    and isinstance(response.result, FetchPipelineResult)
+                    and response.result.documents
+                ):
+                    docs = response.result.documents
+                    display_count = min(len(docs), 5)
+                    for i, doc in enumerate(docs[:display_count], 1):
+                        click.echo(f"  {i}. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
+                    if response.result.documents_found > display_count:
+                        click.echo(f"  ... and {response.result.documents_found - display_count} more.")
+
+            except Exception:
+                logger.exception("Error processing input")
+                click.echo("  Error processing your request. See log for details.")
+
+            click.echo()

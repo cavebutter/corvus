@@ -128,6 +128,58 @@ class OllamaClient:
 
         return parsed, raw
 
+    async def chat(
+        self,
+        model: str,
+        system: str,
+        prompt: str,
+        *,
+        temperature: float = 0.7,
+        keep_alive: str | None = None,
+    ) -> tuple[str, OllamaResponse]:
+        """Generate a free-form chat response (no JSON schema constraint).
+
+        Used for general conversation where structured output is not needed.
+
+        Args:
+            model: Ollama model name.
+            system: System prompt with persona instructions.
+            prompt: User message.
+            temperature: Sampling temperature. Higher = more creative.
+            keep_alive: How long to keep the model loaded after this request.
+
+        Returns:
+            Tuple of (response text, raw OllamaResponse).
+        """
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "keep_alive": keep_alive or self._default_keep_alive,
+            "options": {
+                "temperature": temperature,
+            },
+        }
+
+        response = await self._client.post("/api/chat", json=payload)
+        response.raise_for_status()
+
+        raw = OllamaResponse.model_validate(response.json())
+        content = raw.message.get("content", "")
+
+        logger.debug(
+            "Ollama chat %s: %d prompt tokens, %d eval tokens, %.1fs total",
+            model,
+            raw.prompt_eval_count,
+            raw.eval_count,
+            raw.total_duration / 1e9,
+        )
+
+        return content, raw
+
     async def list_models(self) -> list[dict]:
         """List models available on the Ollama server."""
         response = await self._client.get("/api/tags")

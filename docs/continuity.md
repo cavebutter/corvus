@@ -4,6 +4,119 @@
 
 ---
 
+## Session: 2026-02-24 (session 9)
+
+### What was done
+- Completed Epic 6: Orchestrator Architecture — Phase 2 (5 stories: S6.1–S6.5)
+- **S6.1** `corvus/schemas/orchestrator.py` (new): `Intent` enum (7 intents), `IntentClassification` flat model with per-intent optional params, pipeline result models (`TagPipelineResult`, `FetchPipelineResult`, `StatusResult`, `DigestResult`), `OrchestratorAction`, `OrchestratorResponse`
+- **S6.2** `corvus/planner/intent_classifier.py` (new): Stateless async `classify_intent()` — calls Ollama with IntentClassification JSON schema; system prompt describes 7 intents + param extraction rules; "when ambiguous prefer fetch" rule
+- **S6.3** `corvus/orchestrator/pipelines.py` (new): Extracted 4 pipeline handlers from CLI:
+  - `run_tag_pipeline()` — full fetch→tag→route loop, returns `TagPipelineResult` with counts
+  - `run_fetch_pipeline()` — interpret→search, returns `FetchPipelineResult` with doc dicts + confidence
+  - `run_status_pipeline()` — pure Python, returns `StatusResult`
+  - `run_digest_pipeline()` — pure Python, returns `DigestResult`
+  - All handlers accept `on_progress: Callable | None` for output delegation
+  - CLI commands refactored to call handlers: `tag`, `fetch`, `digest`, `status` all use pipeline handlers
+  - `FetchPipelineResult` includes `interpretation_confidence` for CLI low-confidence check
+- **S6.4** `corvus/orchestrator/router.py` (new): Deterministic `dispatch()` — confidence gate (< 0.7 → NEEDS_CLARIFICATION), INTERACTIVE_REQUIRED for review/watch, pipeline dispatch for tag/fetch/status/digest, GENERAL_CHAT calls `ollama.chat()`
+  - `corvus/integrations/ollama.py`: Added `chat()` method — free-form response without JSON schema, temperature 0.7
+- **S6.5** `corvus/cli.py`: Added `corvus ask` (single NL query) + `corvus chat` (interactive REPL):
+  - `ask`: classify intent → dispatch → render + interactive fetch selection
+  - `chat`: stateless REPL loop, 10m default keep_alive, quit/exit/q to leave
+  - Shared `_render_orchestrator_response()` renders all action/result types
+  - Shared `_resolve_model()` extracts model auto-detection from both ask/fetch flows
+
+### Test summary
+- **47 new tests** across 4 files:
+  - `tests/test_intent_classifier.py` (new) — 11 tests: system prompt, mocked LLM for each intent, confidence, keep_alive, schema class, 1 live
+  - `tests/test_pipeline_handlers.py` (new) — 13 tests: tag (no docs, queued, auto-applied, errors, no callback), fetch (found, empty, warnings, fallback), status (empty, pending), digest (empty, custom hours)
+  - `tests/test_orchestrator_router.py` (new) — 11 tests: confidence gate, threshold boundary, interactive-required (review, watch), tag dispatch, fetch dispatch, fetch no query, status, digest, digest default hours, chat
+  - `tests/test_cli.py` (extended) — 13 new tests: ask (fetch, status, clarification, interactive-required, chat response, empty query), chat (quit, process input, skip empty, handle error), help (ask, chat)
+- **All 239 tests passing** (192 original + 47 new)
+
+### Current state
+- **Epics 1–6:** Complete (archived)
+- **All tests passing:** 239 total (235 fast, 4 slow/live)
+- **Test breakdown:**
+  - `test_cli.py` — 39 (all unit, mocked)
+  - `test_intent_classifier.py` — 11 (10 unit + 1 slow live)
+  - `test_pipeline_handlers.py` — 13 (all unit)
+  - `test_orchestrator_router.py` — 11 (all unit)
+  - `test_query_interpreter.py` — 8 (7 unit + 1 slow live)
+  - `test_retrieval_router.py` — 39 (all unit)
+  - `test_paperless_client.py` — 4
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### Architecture after Epic 6
+```
+User: "find my AT&T invoice"
+       |
+   corvus ask / corvus chat
+       |
+   Intent Classifier (LLM — corvus/planner/intent_classifier.py)
+       |
+   IntentClassification {intent: FETCH_DOCUMENT, fetch_query: "AT&T invoice", confidence: 0.95}
+       |
+   Orchestrator Router (Python — corvus/orchestrator/router.py)
+     - Confidence gate (< 0.7 → ask to clarify)
+     - Dispatches to pipeline handler
+       |
+   Pipeline Handler (corvus/orchestrator/pipelines.py)
+     - run_fetch_pipeline() → calls interpret_query + resolve_and_search
+       |
+   CLI renders result, handles interactive selection if needed
+```
+
+### Key design decisions
+- **Flat IntentClassification model** — all per-intent params as optional fields; intent field determines which are relevant; simple for LLM structured output
+- **Pipeline handlers return data, CLI renders** — both `corvus fetch` and `corvus ask "find..."` call the same handler, enabling future voice/web interfaces
+- **Confidence gate at 0.7** — below threshold returns NEEDS_CLARIFICATION, no destructive action taken
+- **Existing CLI commands preserved** — `corvus tag/fetch/review/watch/digest/status` work exactly as before
+- **Chat is stateless** — each turn classified + dispatched independently; no conversation memory for V1
+- **`on_progress` callback pattern** — CLI passes `click.echo`, orchestrator can pass `logger.info` or `None`
+
+### Smoke test results
+- `corvus status` — works correctly (0 pending, 10 processed, 10 reviewed)
+- `corvus digest --hours 5` — works correctly (no activity in window)
+- `corvus ask find latest mortgage statement`:
+  - Intent classifier: **correct** — `fetch_document` at 95%, `fetch_query="latest mortgage statement"`
+  - Query interpreter: **PROBLEM** — returned `confidence=0.90` but `text=None`, no tags, no correspondent, no type. All structured fields empty despite clear query.
+  - Result: Paperless searched with `{}` filters → returned all 95 docs unfiltered
+  - Root cause: query interpreter LLM (qwen2.5:7b-instruct) failed to populate any structured fields. Needs prompt tuning or few-shot examples.
+- `corvus ask tag my documents` — **works correctly**: intent classifier returned `tag_documents` at 90%, tagged all 95 untagged documents (~5 min), all queued for review. Hit pagination bug at end (see fix below).
+- `corvus ask what is the status` — works correctly
+- `corvus ask what happened today` — works correctly
+- `corvus ask hello how are you` — works correctly (general_chat)
+- `corvus ask review my pending items` — works correctly (interactive_required → "use corvus review")
+- `corvus ask watch my scan folder` — works correctly (interactive_required → "use corvus watch")
+- `corvus chat` — works correctly (REPL loop, multiple intents, quit exits)
+- First run hit `httpx.RemoteProtocolError` (Paperless server disconnect) — added try/except in `_ask_async` so it shows clean error instead of raw traceback.
+
+### Bug fixes during smoke testing
+1. **Error handling in `_ask_async`** — wraps `dispatch()` in try/except, logs exception, shows clean error message instead of traceback
+2. **Pagination bug in `run_tag_pipeline`** — after processing the last page, the loop tried to fetch the next page which Paperless returns as 404. Fixed by breaking when `len(docs) < page_size` (last page detected). Also added defensive 404 handling in `PaperlessClient.list_documents()` to return empty list instead of crashing.
+
+### Known issues
+1. **Query interpreter empty fields** — LLM sometimes returns high confidence with no search fields populated. Needs prompt improvement (few-shot examples, post-validation). Filed as S7.1 in backlog.
+2. **Paperless connection drops** — transient `RemoteProtocolError` from Paperless server. Needs retry logic or graceful handling in pipeline handlers. Filed as S7.2.
+
+### Next steps
+- **Epic 7** (backlog_current.md): S7.1 (query interpreter fix), S7.2 (connection retry), S7.3 (full smoke test)
+- After Epic 7: Phase 3 (email pipeline), voice I/O (STT/TTS), or web dashboard
+- Consider `corvus chat` conversation memory (multi-turn context)
+
+---
+
 ## Session: 2026-02-24 (sessions 7–8)
 
 ### What was done
