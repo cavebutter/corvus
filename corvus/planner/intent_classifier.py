@@ -69,9 +69,20 @@ web_search when the answer requires real-time information, current events, \
 factual knowledge beyond the document system, or the user explicitly says \
 "search" or "look up".
 7. When ambiguous between web_search and general_chat, prefer general_chat.
+8. When conversation context is provided, use it to resolve ambiguous references \
+like "the first one", "that document", "download it", etc.
 """
 
 USER_PROMPT = """\
+Classify this user input:
+
+{user_input}
+"""
+
+USER_PROMPT_WITH_CONTEXT = """\
+Recent conversation:
+{conversation_context}
+
 Classify this user input:
 
 {user_input}
@@ -84,6 +95,7 @@ async def classify_intent(
     ollama: OllamaClient,
     model: str,
     keep_alive: str | None = None,
+    conversation_context: str | None = None,
 ) -> tuple[IntentClassification, OllamaResponse]:
     """Classify user natural language input into an intent.
 
@@ -92,11 +104,19 @@ async def classify_intent(
         ollama: An open OllamaClient instance.
         model: Ollama model name to use for inference.
         keep_alive: Ollama keep_alive parameter.
+        conversation_context: Optional recent conversation context for
+            resolving ambiguous references.
 
     Returns:
         Tuple of (IntentClassification, OllamaResponse).
     """
-    prompt = USER_PROMPT.format(user_input=user_input)
+    if conversation_context:
+        prompt = USER_PROMPT_WITH_CONTEXT.format(
+            conversation_context=conversation_context,
+            user_input=user_input,
+        )
+    else:
+        prompt = USER_PROMPT.format(user_input=user_input)
 
     logger.info("Classifying intent: %s", user_input)
 

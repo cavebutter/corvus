@@ -320,6 +320,137 @@ async def test_dispatch_web_search(tmp_path):
     assert mock_pipeline.call_args.kwargs["query"] == "weather in NYC"
 
 
+# ------------------------------------------------------------------
+# CHAT_MODEL (S9.4)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_chat_uses_chat_model(tmp_path):
+    """GENERAL_CHAT with chat_model set uses the chat model for ollama.chat()."""
+    classification = _make_classification(Intent.GENERAL_CHAT)
+    kwargs = _make_dispatch_kwargs(tmp_path)
+    kwargs["ollama"].chat.return_value = ("Hello!", AsyncMock())
+
+    response = await dispatch(
+        classification,
+        user_input="hello",
+        chat_model="qwen2.5:14b-instruct",
+        **kwargs,
+    )
+
+    assert response.action == OrchestratorAction.CHAT_RESPONSE
+    call_kwargs = kwargs["ollama"].chat.call_args.kwargs
+    assert call_kwargs["model"] == "qwen2.5:14b-instruct"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_search_uses_chat_model(tmp_path):
+    """WEB_SEARCH with chat_model set uses the chat model for search pipeline."""
+    classification = _make_classification(
+        Intent.WEB_SEARCH, search_query="weather",
+    )
+    mock_result = WebSearchResult(summary="Sunny.", sources=[], query="weather")
+
+    with patch(
+        "corvus.orchestrator.pipelines.run_search_pipeline",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ) as mock_pipeline:
+        response = await dispatch(
+            classification,
+            user_input="weather",
+            chat_model="qwen2.5:14b-instruct",
+            **_make_dispatch_kwargs(tmp_path),
+        )
+
+    assert response.action == OrchestratorAction.DISPATCHED
+    assert mock_pipeline.call_args.kwargs["model"] == "qwen2.5:14b-instruct"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_chat_no_chat_model_uses_default(tmp_path):
+    """GENERAL_CHAT without chat_model uses the default model."""
+    classification = _make_classification(Intent.GENERAL_CHAT)
+    kwargs = _make_dispatch_kwargs(tmp_path)
+    kwargs["ollama"].chat.return_value = ("Hello!", AsyncMock())
+
+    await dispatch(
+        classification,
+        user_input="hello",
+        **kwargs,
+    )
+
+    call_kwargs = kwargs["ollama"].chat.call_args.kwargs
+    assert call_kwargs["model"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_tag_ignores_chat_model(tmp_path):
+    """TAG_DOCUMENTS with chat_model set still uses the regular model."""
+    classification = _make_classification(Intent.TAG_DOCUMENTS, tag_limit=1)
+    mock_result = TagPipelineResult(processed=1, queued=1, auto_applied=0, errors=0)
+
+    with patch(
+        "corvus.orchestrator.pipelines.run_tag_pipeline",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ) as mock_pipeline:
+        await dispatch(
+            classification,
+            user_input="tag 1 document",
+            chat_model="qwen2.5:14b-instruct",
+            **_make_dispatch_kwargs(tmp_path),
+        )
+
+    assert mock_pipeline.call_args.kwargs["model"] == "test-model"
+
+
+# ------------------------------------------------------------------
+# Conversation history (S10.3)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_chat_passes_history(tmp_path):
+    """GENERAL_CHAT forwards conversation_history to ollama.chat()."""
+    classification = _make_classification(Intent.GENERAL_CHAT)
+    kwargs = _make_dispatch_kwargs(tmp_path)
+    kwargs["ollama"].chat.return_value = ("I remember!", AsyncMock())
+
+    history = [
+        {"role": "user", "content": "find my invoices"},
+        {"role": "assistant", "content": "Found 3 documents."},
+    ]
+
+    await dispatch(
+        classification,
+        user_input="tell me more about the first one",
+        conversation_history=history,
+        **kwargs,
+    )
+
+    call_kwargs = kwargs["ollama"].chat.call_args.kwargs
+    assert call_kwargs["messages"] == history
+
+
+@pytest.mark.asyncio
+async def test_dispatch_chat_no_history(tmp_path):
+    """GENERAL_CHAT without conversation_history passes None."""
+    classification = _make_classification(Intent.GENERAL_CHAT)
+    kwargs = _make_dispatch_kwargs(tmp_path)
+    kwargs["ollama"].chat.return_value = ("Hello!", AsyncMock())
+
+    await dispatch(
+        classification,
+        user_input="hello",
+        **kwargs,
+    )
+
+    call_kwargs = kwargs["ollama"].chat.call_args.kwargs
+    assert call_kwargs["messages"] is None
+
+
 @pytest.mark.asyncio
 async def test_dispatch_web_search_no_query_uses_input(tmp_path):
     """WEB_SEARCH falls back to user_input when search_query is None."""

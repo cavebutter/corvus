@@ -39,6 +39,8 @@ async def dispatch(
     queue_db_path: str,
     audit_log_path: str,
     on_progress: Callable[[str], None] | None = None,
+    chat_model: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> OrchestratorResponse:
     """Route a classified intent to the appropriate pipeline handler.
 
@@ -58,6 +60,7 @@ async def dispatch(
     """
     intent = classification.intent
     confidence = classification.confidence
+    effective_chat_model = chat_model or model
 
     # Confidence gate
     if confidence < CONFIDENCE_THRESHOLD:
@@ -119,14 +122,15 @@ async def dispatch(
     if intent == Intent.WEB_SEARCH:
         return await _dispatch_search(
             classification, user_input=user_input,
-            ollama=ollama, model=model, keep_alive=keep_alive,
+            ollama=ollama, model=effective_chat_model, keep_alive=keep_alive,
             on_progress=on_progress,
         )
 
     if intent == Intent.GENERAL_CHAT:
         return await _dispatch_chat(
-            user_input, ollama=ollama, model=model, keep_alive=keep_alive,
-            confidence=confidence,
+            user_input, ollama=ollama, model=effective_chat_model,
+            keep_alive=keep_alive, confidence=confidence,
+            conversation_history=conversation_history,
         )
 
     # Should not reach here, but handle gracefully
@@ -293,12 +297,14 @@ async def _dispatch_chat(
     model: str,
     keep_alive: str,
     confidence: float,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> OrchestratorResponse:
     text, _raw = await ollama.chat(
         model=model,
         system=CORVUS_PERSONA,
         prompt=user_input,
         keep_alive=keep_alive,
+        messages=conversation_history,
     )
 
     return OrchestratorResponse(

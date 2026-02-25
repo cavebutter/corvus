@@ -136,6 +136,7 @@ class OllamaClient:
         *,
         temperature: float = 0.7,
         keep_alive: str | None = None,
+        messages: list[dict[str, str]] | None = None,
     ) -> tuple[str, OllamaResponse]:
         """Generate a free-form chat response (no JSON schema constraint).
 
@@ -147,16 +148,21 @@ class OllamaClient:
             prompt: User message.
             temperature: Sampling temperature. Higher = more creative.
             keep_alive: How long to keep the model loaded after this request.
+            messages: Optional conversation history (Ollama-compatible message dicts).
+                Inserted between the system prompt and the current user message.
 
         Returns:
             Tuple of (response text, raw OllamaResponse).
         """
+        built_messages = [{"role": "system", "content": system}]
+        if messages:
+            built_messages.extend(messages)
+        if prompt:
+            built_messages.append({"role": "user", "content": prompt})
+
         payload = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": built_messages,
             "stream": False,
             "keep_alive": keep_alive or self._default_keep_alive,
             "options": {

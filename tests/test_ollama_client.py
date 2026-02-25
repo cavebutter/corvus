@@ -1,10 +1,91 @@
 """Tests for the Ollama API client."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
 import pytest
 
 from corvus.config import OLLAMA_BASE_URL
 from corvus.integrations.ollama import OllamaClient
 from corvus.schemas.document_tagging import DocumentTaggingResult
+
+
+# ------------------------------------------------------------------
+# Unit tests (no Ollama server needed)
+# ------------------------------------------------------------------
+
+
+class TestChatMessageBuilding:
+    """Test that chat() builds the messages payload correctly."""
+
+    async def test_chat_with_messages_builds_correct_payload(self):
+        """Messages are inserted between system prompt and user message."""
+        client = OllamaClient("http://localhost:11434")
+
+        history = [
+            {"role": "user", "content": "previous question"},
+            {"role": "assistant", "content": "previous answer"},
+        ]
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "model": "test",
+            "message": {"role": "assistant", "content": "Hello!"},
+            "done": True,
+        }
+
+        with patch.object(client._client, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+            await client.chat(
+                model="test-model",
+                system="You are helpful.",
+                prompt="current question",
+                messages=history,
+            )
+
+        payload = mock_post.call_args.kwargs["json"]
+        msgs = payload["messages"]
+        assert len(msgs) == 4
+        assert msgs[0] == {"role": "system", "content": "You are helpful."}
+        assert msgs[1] == {"role": "user", "content": "previous question"}
+        assert msgs[2] == {"role": "assistant", "content": "previous answer"}
+        assert msgs[3] == {"role": "user", "content": "current question"}
+
+        await client.close()
+
+    async def test_chat_without_messages_backwards_compatible(self):
+        """Without messages param, payload has system + user only (2 messages)."""
+        client = OllamaClient("http://localhost:11434")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "model": "test",
+            "message": {"role": "assistant", "content": "Hello!"},
+            "done": True,
+        }
+
+        with patch.object(client._client, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+            await client.chat(
+                model="test-model",
+                system="You are helpful.",
+                prompt="hello",
+            )
+
+        payload = mock_post.call_args.kwargs["json"]
+        msgs = payload["messages"]
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "user"
+
+        await client.close()
+
+
+# ------------------------------------------------------------------
+# Integration tests (require Ollama server)
+# ------------------------------------------------------------------
 
 
 @pytest.fixture()

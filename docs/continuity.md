@@ -4,6 +4,111 @@
 
 ---
 
+## Session: 2026-02-25 (session 13)
+
+### What was done
+- Implemented **Epic 9: CHAT_MODEL Config** (4 stories, all complete)
+- Implemented **Epic 10: Conversation Memory** (6 stories, all complete)
+
+#### Epic 9 — CHAT_MODEL Config
+Added a `CHAT_MODEL` config variable that allows `corvus chat` and web search summarization to use a separate (larger) LLM model for free-form text generation while keeping the default model for structured output tasks (classification, extraction).
+
+- **`corvus/config.py`**: Added `CHAT_MODEL` (empty string = use same model for everything)
+- **`corvus/orchestrator/router.py`**: `dispatch()` accepts `chat_model` param, computes `effective_chat_model = chat_model or model`, passes to `_dispatch_chat()` and `_dispatch_search()`. All other dispatch functions (tag, fetch, status, digest) keep using `model`.
+- **`corvus/cli.py`**: Both `_ask_async()` and `_chat_async()` resolve `CHAT_MODEL` and pass to `dispatch()`. Echo chat model when set.
+
+#### Epic 10 — Conversation Memory
+The `corvus chat` REPL was completely stateless. Each turn was independently classified and dispatched with no prior context. Now has in-memory conversation history (lost on exit, V1).
+
+- **`corvus/orchestrator/history.py`** (new): `ConversationHistory` class — stores user/assistant message pairs, provides `get_messages()` (Ollama-compatible list) and `get_recent_context()` (formatted text for classifier). `summarize_response()` creates brief summaries for non-chat intents (fetch → "Found N document(s): ...", tag → "Tagged N ...", etc.).
+- **`corvus/integrations/ollama.py`**: `chat()` accepts optional `messages` param — inserted between system prompt and current user message. Backwards-compatible (defaults to None).
+- **`corvus/planner/intent_classifier.py`**: `classify_intent()` accepts `conversation_context` param. Context-aware prompt template includes recent conversation. Added rule 8: "resolve ambiguous references like 'the first one', 'that document', 'download it'".
+- **`corvus/orchestrator/router.py`**: `dispatch()` accepts `conversation_history`, forwards to `_dispatch_chat()` which passes to `ollama.chat(messages=...)`.
+- **`corvus/cli.py`**: `_chat_async()` creates `ConversationHistory(max_turns=20)`, passes context to classifier, passes message history to dispatch, records user/assistant turns after each exchange. `_ask_async()` remains stateless.
+
+#### S10.7 — Interactive fetch in chat mode (smoke test fix)
+Smoke testing revealed that `corvus chat` could resolve document references via conversation memory (e.g., "tell me about the first one" correctly became a search for "PHH Mortgage Escrow"), but the results were display-only — no way to actually open or download the document. Fixed by adding interactive fetch selection to the chat REPL:
+- **Single result**: auto-opens in browser (same as `corvus ask`/`corvus fetch`)
+- **Multiple results**: numbered list + `[1-N, s to skip]` prompt; pick a number to open, press Enter to skip (default `s`) and continue chatting
+- Replaced old `test_chat_fetch_inline` with 3 new tests: `test_chat_fetch_select`, `test_chat_fetch_skip`, `test_chat_fetch_single_auto_opens`
+
+### Test summary
+- **30 new tests** (net +30, replaced 1 old test with 3 new):
+  - `tests/test_conversation_history.py` (new) — 14 tests: history basics (empty, add, trim, copy), get_recent_context (empty, formatting, max_turns), summarize_response (chat, fetch, fetch-empty, tag, status, web_search, clarification)
+  - `tests/test_orchestrator_router.py` — 6 new: chat_model (chat uses, search uses, default fallback, tag ignores), conversation_history (forwarded, None)
+  - `tests/test_ollama_client.py` — 2 new: messages builds correct payload, without messages backwards compatible
+  - `tests/test_intent_classifier.py` — 2 new: with conversation context, without context unchanged
+  - `tests/test_cli.py` — 6 new: chat_model display, history to dispatch, context to classifier, ask no history, chat fetch select, chat fetch skip, chat fetch single auto-open (replaced 1 old inline-only test)
+- **All 303 tests passing** (297 fast + 6 slow/skipped)
+
+### Files changed
+| File | Change |
+|------|--------|
+| `corvus/config.py` | Added `CHAT_MODEL` |
+| `corvus/orchestrator/router.py` | `chat_model` + `conversation_history` params on `dispatch()` and `_dispatch_chat()` |
+| `corvus/integrations/ollama.py` | `messages` param on `chat()` |
+| `corvus/planner/intent_classifier.py` | `conversation_context` param + rule 8 + context-aware prompt template |
+| `corvus/orchestrator/history.py` | **New** — ConversationHistory + summarize_response |
+| `corvus/cli.py` | Wire CHAT_MODEL + history into `_ask_async()` and `_chat_async()`; interactive fetch selection in chat mode |
+| `tests/test_conversation_history.py` | **New** — 14 tests |
+| `tests/test_orchestrator_router.py` | 6 new tests |
+| `tests/test_ollama_client.py` | 2 new tests |
+| `tests/test_intent_classifier.py` | 2 new tests |
+| `tests/test_cli.py` | 7 new tests (replaced 1 old) |
+| `docs/backlog_current.md` | Epics 9 + 10 |
+
+### Current state
+- **Epics 1–10:** Complete (Epics 1–7 archived, 8–10 in backlog_current)
+- **All tests passing:** 303 total
+- **Test breakdown:**
+  - `test_cli.py` — 56
+  - `test_conversation_history.py` — 14
+  - `test_intent_classifier.py` — 13 (1 slow)
+  - `test_pipeline_handlers.py` — 18
+  - `test_orchestrator_router.py` — 19
+  - `test_search_integration.py` — 5
+  - `test_ollama_client.py` — 4 (1 slow)
+  - `test_query_interpreter.py` — 27 (1 slow)
+  - `test_retrieval_router.py` — 39
+  - `test_paperless_client.py` — 6 (4 integration)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### VRAM note
+When `CHAT_MODEL=qwen2.5:14b-instruct` and default is `qwen2.5:7b-instruct`, both may coexist in VRAM during chat (7B ~4.5GB + 14B ~10GB ≈ 14.5GB, fits 24GB RTX 4090). Ollama's `keep_alive` handles lifecycle.
+
+### Smoke test results
+- `CHAT_MODEL=qwen2.5:14b-instruct` — auto-selected and displayed correctly
+- "hello" → "What did I just say?" → correctly recalled "hello" (conversation memory working)
+- "find documents related to my mortgage" → 31 results → "tell me about the first one" → classifier resolved to "PHH Mortgage Escrow", searched and found 3 docs
+- "Show me the first document" / "Fetch me the first document" → also resolved correctly
+- "Tell me about document number 1" → **did not resolve** (literal "document number 1" passed as query). Natural references ("the first one") work better than index-style ("number 1") — inherent V1 limitation of text-based context summary
+- "What is the status" → correctly switched to show_status intent mid-conversation
+- Interactive fetch in chat was missing (display-only, no delivery) → fixed with S10.7
+
+### Re-smoke-test results (S10.7 fix confirmed)
+- CHAT_MODEL display: confirmed
+- Conversation memory recall: confirmed
+- Multi-result fetch + interactive selection: confirmed (number opens browser)
+- Multi-result fetch + skip (Enter/s): confirmed (returns to prompt)
+- Single-result fetch auto-open: confirmed
+- Reference resolution + fetch delivery: confirmed
+- Intent switching mid-conversation: confirmed
+- Stateless `corvus ask`: confirmed (no history, exits immediately)
+
+### Next steps
+- Consider next: Phase 3 (email pipeline), voice I/O, web dashboard, web search page content fetching, conversation memory persistence (V2)
+
+---
+
 ## Session: 2026-02-25 (session 12)
 
 ### What was done

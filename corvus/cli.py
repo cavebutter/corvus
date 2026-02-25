@@ -20,6 +20,7 @@ import httpx
 
 from corvus.config import (
     AUDIT_LOG_PATH,
+    CHAT_MODEL,
     OLLAMA_BASE_URL,
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
@@ -597,11 +598,15 @@ async def _ask_async(query: str, model: str | None, keep_alive: str) -> None:
     from corvus.planner.intent_classifier import classify_intent
     from corvus.schemas.orchestrator import OrchestratorAction
 
+    chat_model_resolved = CHAT_MODEL if CHAT_MODEL else None
+
     async with (
         PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
         OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
     ):
         model = await _resolve_model(ollama, model)
+        if chat_model_resolved:
+            click.echo(f"Chat model: {CHAT_MODEL}")
 
         # Step 1: Classify intent
         classification, _raw = await classify_intent(
@@ -621,6 +626,7 @@ async def _ask_async(query: str, model: str | None, keep_alive: str) -> None:
                 queue_db_path=QUEUE_DB_PATH,
                 audit_log_path=AUDIT_LOG_PATH,
                 on_progress=click.echo,
+                chat_model=chat_model_resolved,
             )
         except Exception:
             logger.exception("Error dispatching intent %s", classification.intent.value)
@@ -741,17 +747,24 @@ def chat(model: str | None, keep_alive: str) -> None:
 async def _chat_async(model: str | None, keep_alive: str) -> None:
     from corvus.integrations.ollama import OllamaClient
     from corvus.integrations.paperless import PaperlessClient
+    from corvus.orchestrator.history import ConversationHistory, summarize_response
     from corvus.orchestrator.router import dispatch
     from corvus.planner.intent_classifier import classify_intent
     from corvus.schemas.orchestrator import FetchPipelineResult, OrchestratorAction
+
+    chat_model_resolved = CHAT_MODEL if CHAT_MODEL else None
 
     async with (
         PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
         OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
     ):
         model = await _resolve_model(ollama, model)
+        if chat_model_resolved:
+            click.echo(f"Chat model: {CHAT_MODEL}")
 
         click.echo("Corvus interactive mode. Type 'quit' to leave.\n")
+
+        history = ConversationHistory(max_turns=20)
 
         while True:
             try:
@@ -768,8 +781,11 @@ async def _chat_async(model: str | None, keep_alive: str) -> None:
                 continue
 
             try:
+                conversation_context = history.get_recent_context(max_turns=5)
+
                 classification, _raw = await classify_intent(
                     user_input, ollama=ollama, model=model, keep_alive=keep_alive,
+                    conversation_context=conversation_context or None,
                 )
                 click.echo(f"  Intent: {classification.intent.value} ({classification.confidence:.0%})")
 
@@ -783,22 +799,56 @@ async def _chat_async(model: str | None, keep_alive: str) -> None:
                     queue_db_path=QUEUE_DB_PATH,
                     audit_log_path=AUDIT_LOG_PATH,
                     on_progress=click.echo,
+                    chat_model=chat_model_resolved,
+                    conversation_history=history.get_messages(),
                 )
 
                 _render_orchestrator_response(response)
 
-                # Show fetch results inline (no interactive selection in chat mode)
+                # Handle fetch results with interactive selection
                 if (
                     response.action == OrchestratorAction.DISPATCHED
                     and isinstance(response.result, FetchPipelineResult)
                     and response.result.documents
                 ):
+                    import webbrowser
+
                     docs = response.result.documents
-                    display_count = min(len(docs), 5)
-                    for i, doc in enumerate(docs[:display_count], 1):
-                        click.echo(_format_doc_line(i, doc, width=1))
-                    if response.result.documents_found > display_count:
-                        click.echo(f"  ... and {response.result.documents_found - display_count} more.")
+                    total = response.result.documents_found
+
+                    if len(docs) == 1 and total == 1:
+                        doc = docs[0]
+                        click.echo(_format_doc_line(1, doc, width=1))
+                        url = paperless.get_document_url(doc["id"])
+                        click.echo(f"Opening: {url}")
+                        webbrowser.open(url)
+                    else:
+                        display_count = min(len(docs), 10)
+                        for i, doc in enumerate(docs[:display_count], 1):
+                            click.echo(_format_doc_line(i, doc, width=1))
+                        if total > display_count:
+                            click.echo(f"  ... and {total - display_count} more.")
+
+                        raw_choice = click.prompt(
+                            "\nSelect",
+                            prompt_suffix=f" [1-{display_count}, s to skip]: ",
+                            default="s",
+                        )
+                        if raw_choice.strip().lower() != "s":
+                            try:
+                                idx = int(raw_choice) - 1
+                                if idx < 0 or idx >= display_count:
+                                    raise ValueError
+                                selected = docs[idx]
+                                url = paperless.get_document_url(selected["id"])
+                                click.echo(f"Opening: {url}")
+                                webbrowser.open(url)
+                            except (ValueError, IndexError):
+                                click.echo("Invalid selection.", err=True)
+
+                # Update conversation history
+                history.add_user_message(user_input)
+                history.add_assistant_message(summarize_response(response))
 
             except Exception:
                 logger.exception("Error processing input")

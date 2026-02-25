@@ -191,6 +191,46 @@ class TestClassifyIntent:
         assert call_kwargs["schema_class"] is IntentClassification
         assert call_kwargs["model"] == "gemma3"
 
+    async def test_classify_with_conversation_context(self):
+        """Prompt includes conversation context when provided."""
+        mock_classification = _mock_classification(
+            Intent.FETCH_DOCUMENT, fetch_query="the first one",
+        )
+        mock_ollama = AsyncMock(spec=OllamaClient)
+        mock_ollama.generate_structured.return_value = (mock_classification, _mock_raw())
+
+        context = "User: find my invoices\nCorvus: Found 3 document(s): A, B, C"
+
+        await classify_intent(
+            "download the first one",
+            ollama=mock_ollama,
+            model="gemma3",
+            conversation_context=context,
+        )
+
+        call_kwargs = mock_ollama.generate_structured.call_args.kwargs
+        prompt = call_kwargs["prompt"]
+        assert "Recent conversation:" in prompt
+        assert "find my invoices" in prompt
+        assert "download the first one" in prompt
+
+    async def test_classify_without_context_unchanged(self):
+        """Without conversation_context, prompt uses the basic template."""
+        mock_classification = _mock_classification(Intent.GENERAL_CHAT)
+        mock_ollama = AsyncMock(spec=OllamaClient)
+        mock_ollama.generate_structured.return_value = (mock_classification, _mock_raw())
+
+        await classify_intent(
+            "hello",
+            ollama=mock_ollama,
+            model="gemma3",
+        )
+
+        call_kwargs = mock_ollama.generate_structured.call_args.kwargs
+        prompt = call_kwargs["prompt"]
+        assert "Recent conversation:" not in prompt
+        assert "hello" in prompt
+
 
 # ------------------------------------------------------------------
 # Integration test (requires Ollama)

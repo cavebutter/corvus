@@ -1408,8 +1408,8 @@ def test_ask_watch_folder_intent(runner, monkeypatch):
     assert "corvus watch" in result.output
 
 
-def test_chat_fetch_inline(runner, monkeypatch):
-    """Chat mode shows fetch results inline (no interactive selection)."""
+def test_chat_fetch_select(runner, monkeypatch):
+    """Chat mode shows fetch results with interactive selection."""
     from corvus.schemas.orchestrator import FetchPipelineResult, Intent
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
@@ -1434,6 +1434,7 @@ def test_chat_fetch_inline(runner, monkeypatch):
 
     mock_ollama = _mock_ollama()
     mock_paperless = _mock_paperless()
+    mock_paperless.get_document_url = MagicMock(return_value="http://localhost:8000/documents/20/details")
 
     with (
         _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
@@ -1448,15 +1449,115 @@ def test_chat_fetch_inline(runner, monkeypatch):
             new_callable=AsyncMock,
             return_value=response,
         ),
+        patch("webbrowser.open") as mock_browser,
     ):
-        result = runner.invoke(cli, ["chat"], input="find invoices\nquit\n")
+        # Select doc 2, then quit
+        result = runner.invoke(cli, ["chat"], input="find invoices\n2\nquit\n")
 
     assert result.exit_code == 0
     assert "3 document(s)" in result.output
     assert "Invoice Jan" in result.output
     assert "Invoice Feb" in result.output
     assert "Invoice Mar" in result.output
+    assert "Opening" in result.output
+    mock_browser.assert_called_once_with("http://localhost:8000/documents/20/details")
     assert "Goodbye" in result.output
+
+
+def test_chat_fetch_skip(runner, monkeypatch):
+    """Chat mode allows skipping fetch selection."""
+    from corvus.schemas.orchestrator import FetchPipelineResult, Intent
+
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    docs = [
+        {"id": 10, "title": "Invoice Jan", "created": "2025-01-01T00:00:00Z",
+         "correspondent": "Acme", "document_type": "Invoice", "tags": ["invoice"]},
+        {"id": 20, "title": "Invoice Feb", "created": "2025-02-01T00:00:00Z",
+         "correspondent": "Acme", "document_type": "Invoice", "tags": ["invoice"]},
+    ]
+
+    classification = _make_intent_classification("fetch_document", fetch_query="invoices")
+    mock_raw = MagicMock()
+
+    fetch_result = FetchPipelineResult(documents_found=2, documents=docs)
+    response = _make_orchestrator_response(
+        "dispatched", intent=Intent.FETCH_DOCUMENT, result=fetch_result,
+    )
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.planner.intent_classifier.classify_intent",
+            new_callable=AsyncMock,
+            return_value=(classification, mock_raw),
+        ),
+        patch(
+            "corvus.orchestrator.router.dispatch",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("webbrowser.open") as mock_browser,
+    ):
+        # Skip selection (press enter for default "s"), then quit
+        result = runner.invoke(cli, ["chat"], input="find invoices\n\nquit\n")
+
+    assert result.exit_code == 0
+    assert "2 document(s)" in result.output
+    mock_browser.assert_not_called()
+    assert "Goodbye" in result.output
+
+
+def test_chat_fetch_single_auto_opens(runner, monkeypatch):
+    """Chat mode auto-opens single fetch result in browser."""
+    from corvus.schemas.orchestrator import FetchPipelineResult, Intent
+
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    docs = [
+        {"id": 73, "title": "AT&T Invoice", "created": "2025-01-01T00:00:00Z",
+         "correspondent": "AT&T", "document_type": "Invoice", "tags": ["invoice"]},
+    ]
+
+    classification = _make_intent_classification("fetch_document", fetch_query="AT&T invoice")
+    mock_raw = MagicMock()
+
+    fetch_result = FetchPipelineResult(documents_found=1, documents=docs)
+    response = _make_orchestrator_response(
+        "dispatched", intent=Intent.FETCH_DOCUMENT, result=fetch_result,
+    )
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+    mock_paperless.get_document_url = MagicMock(return_value="http://localhost:8000/documents/73/details")
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.planner.intent_classifier.classify_intent",
+            new_callable=AsyncMock,
+            return_value=(classification, mock_raw),
+        ),
+        patch(
+            "corvus.orchestrator.router.dispatch",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        patch("webbrowser.open") as mock_browser,
+    ):
+        result = runner.invoke(cli, ["chat"], input="find AT&T invoice\nquit\n")
+
+    assert result.exit_code == 0
+    assert "1 document(s)" in result.output
+    assert "Opening" in result.output
+    mock_browser.assert_called_once_with("http://localhost:8000/documents/73/details")
 
 
 def test_ask_web_search_intent(runner, monkeypatch):
@@ -1640,3 +1741,167 @@ def test_fetch_paperless_connection_error(runner, monkeypatch):
 
     assert result.exit_code == 1
     assert "Lost connection to Paperless" in result.output
+
+
+# ------------------------------------------------------------------
+# S9.4 — CHAT_MODEL display
+# ------------------------------------------------------------------
+
+
+def test_chat_displays_chat_model(runner, monkeypatch):
+    """Chat command shows CHAT_MODEL when configured."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CHAT_MODEL", "qwen2.5:14b-instruct")
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+    ):
+        result = runner.invoke(cli, ["chat"], input="quit\n")
+
+    assert result.exit_code == 0
+    assert "Chat model: qwen2.5:14b-instruct" in result.output
+
+
+# ------------------------------------------------------------------
+# S10.5 — Conversation history wiring
+# ------------------------------------------------------------------
+
+
+def test_chat_passes_history_to_dispatch(runner, monkeypatch):
+    """Chat REPL passes conversation history to dispatch on second turn."""
+    from corvus.schemas.orchestrator import Intent
+
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    classification = _make_intent_classification("general_chat")
+    mock_raw = MagicMock()
+
+    response = _make_orchestrator_response(
+        "chat_response",
+        intent=Intent.GENERAL_CHAT,
+        message="Hello!",
+    )
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    mock_dispatch = AsyncMock(return_value=response)
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.planner.intent_classifier.classify_intent",
+            new_callable=AsyncMock,
+            return_value=(classification, mock_raw),
+        ),
+        patch(
+            "corvus.orchestrator.router.dispatch",
+            mock_dispatch,
+        ),
+    ):
+        result = runner.invoke(cli, ["chat"], input="hello\ntell me more\nquit\n")
+
+    assert result.exit_code == 0
+    # First dispatch: no history yet
+    first_call = mock_dispatch.call_args_list[0]
+    assert first_call.kwargs.get("conversation_history") == []
+    # Second dispatch: history should contain first turn
+    second_call = mock_dispatch.call_args_list[1]
+    history = second_call.kwargs.get("conversation_history")
+    assert len(history) == 2
+    assert history[0]["role"] == "user"
+    assert history[0]["content"] == "hello"
+
+
+def test_chat_passes_context_to_classifier(runner, monkeypatch):
+    """Chat REPL passes conversation context to classifier on second turn."""
+    from corvus.schemas.orchestrator import Intent
+
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    classification = _make_intent_classification("general_chat")
+    mock_raw = MagicMock()
+
+    response = _make_orchestrator_response(
+        "chat_response",
+        intent=Intent.GENERAL_CHAT,
+        message="Hello!",
+    )
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+    mock_classify = AsyncMock(return_value=(classification, mock_raw))
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.planner.intent_classifier.classify_intent",
+            mock_classify,
+        ),
+        patch(
+            "corvus.orchestrator.router.dispatch",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+    ):
+        result = runner.invoke(cli, ["chat"], input="hello\ntell me more\nquit\n")
+
+    assert result.exit_code == 0
+    # First call: no context (empty string → None)
+    first_call = mock_classify.call_args_list[0]
+    assert first_call.kwargs.get("conversation_context") is None
+    # Second call: has context from first turn
+    second_call = mock_classify.call_args_list[1]
+    context = second_call.kwargs.get("conversation_context")
+    assert context is not None
+    assert "hello" in context
+
+
+def test_ask_no_conversation_history(runner, monkeypatch):
+    """Ask command does not pass conversation_history (stateless)."""
+    from corvus.schemas.orchestrator import Intent
+
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+
+    classification = _make_intent_classification("general_chat")
+    mock_raw = MagicMock()
+
+    response = _make_orchestrator_response(
+        "chat_response",
+        intent=Intent.GENERAL_CHAT,
+        message="Hello!",
+    )
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+    mock_dispatch = AsyncMock(return_value=response)
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+        patch(
+            "corvus.planner.intent_classifier.classify_intent",
+            new_callable=AsyncMock,
+            return_value=(classification, mock_raw),
+        ),
+        patch(
+            "corvus.orchestrator.router.dispatch",
+            mock_dispatch,
+        ),
+    ):
+        result = runner.invoke(cli, ["ask", "hello"])
+
+    assert result.exit_code == 0
+    call_kwargs = mock_dispatch.call_args.kwargs
+    # ask does not pass conversation_history (not in kwargs or is None)
+    assert call_kwargs.get("conversation_history") is None
