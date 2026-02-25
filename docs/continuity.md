@@ -4,6 +4,157 @@
 
 ---
 
+## Session: 2026-02-25 (session 12)
+
+### What was done
+- Implemented **Epic 8: Web Search Intent** (9 stories, all complete)
+
+#### Overview
+Added `WEB_SEARCH` as a new intent for `corvus ask`/`corvus chat`. Users can now ask questions requiring current/external knowledge (weather, news, factual lookups). Corvus searches DuckDuckGo, summarizes results via LLM with numbered source citations, and gracefully falls back to LLM-only answers when search fails.
+
+#### Changes
+- **`pyproject.toml`**: Added `ddgs>=9.0` dependency (formerly `duckduckgo-search`, renamed upstream)
+- **`corvus/schemas/orchestrator.py`**: `WEB_SEARCH` intent enum, `search_query` on `IntentClassification`, `WebSearchSource` + `WebSearchResult` models, updated `OrchestratorResponse.result` union
+- **`corvus/integrations/search.py`** (new): Async DDG wrapper — `SearchResult`, `SearchError`, `_search_sync()` (lazy DDGS import), `web_search()` (asyncio.to_thread). Uses `backend="duckduckgo"` by default (library defaults to `"auto"` which rotates through Bing/Google/etc.)
+- **`corvus/config.py`**: `WEB_SEARCH_MAX_RESULTS` (default 5)
+- **`corvus/planner/intent_classifier.py`**: web_search as intent #7 with examples; rules 6 (when to classify as web_search) and 7 (prefer general_chat when ambiguous)
+- **`corvus/orchestrator/pipelines.py`**: `run_search_pipeline()` (DDG search → LLM summarization prompt with citations, temperature=0.3) + `_search_fallback_chat()` (LLM-only with "search unavailable" disclaimer). Summarization prompt instructs LLM to extract specific facts from snippets, give direct answers, and never redirect users to visit websites.
+- **`corvus/orchestrator/router.py`**: `_dispatch_search()` with search_query fallback to user_input; WEB_SEARCH branch before GENERAL_CHAT
+- **`corvus/cli.py`**: `WebSearchResult` rendering — summary + numbered sources with title + URL
+
+### Test summary
+- **14 new tests**:
+  - `tests/test_search_integration.py` (new) — 5 tests: _search_sync DDGS call, error wrapping, param forwarding, web_search async, empty results
+  - `tests/test_pipeline_handlers.py` — 4 new: search summary, no results fallback, SearchError fallback, progress messages
+  - `tests/test_orchestrator_router.py` — 2 new: dispatch with search_query, fallback to user_input
+  - `tests/test_intent_classifier.py` — 1 new: web_search intent classification
+  - `tests/test_cli.py` — 2 new: ask web search rendering, chat web search
+- **All 273 tests passing** (267 fast + 6 slow/skipped)
+
+### Files changed
+| File | Change |
+|------|--------|
+| `pyproject.toml` | Added `ddgs>=9.0` |
+| `corvus/schemas/orchestrator.py` | WEB_SEARCH intent, search_query, WebSearchSource, WebSearchResult, union |
+| `corvus/integrations/search.py` | **New** — async DDG wrapper |
+| `corvus/config.py` | WEB_SEARCH_MAX_RESULTS |
+| `corvus/planner/intent_classifier.py` | web_search intent #7 + rules 6-7 |
+| `corvus/orchestrator/pipelines.py` | run_search_pipeline, _search_fallback_chat |
+| `corvus/orchestrator/router.py` | _dispatch_search, WEB_SEARCH branch |
+| `corvus/cli.py` | WebSearchResult rendering |
+| `tests/test_search_integration.py` | **New** — 5 tests |
+| `tests/test_pipeline_handlers.py` | 4 new search tests |
+| `tests/test_orchestrator_router.py` | 2 new search tests |
+| `tests/test_intent_classifier.py` | 1 new web_search test |
+| `tests/test_cli.py` | 2 new web search tests |
+| `docs/backlog_current.md` | Epic 8 added |
+
+### Current state
+- **Epics 1–7:** Complete (archived/ready to archive)
+- **Epic 8:** Complete (web search intent)
+- **All tests passing:** 273 total
+- **Test breakdown:**
+  - `test_cli.py` — 50
+  - `test_intent_classifier.py` — 12 (1 slow)
+  - `test_pipeline_handlers.py` — 18
+  - `test_orchestrator_router.py` — 13
+  - `test_search_integration.py` — 5
+  - `test_query_interpreter.py` — 27 (1 slow)
+  - `test_retrieval_router.py` — 39
+  - `test_paperless_client.py` — 6 (4 integration)
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### Next steps
+- Smoke test: `corvus ask what is the weather in NYC` — should classify as web_search, return summary + sources
+- Smoke test: `corvus ask hello` — should still classify as general_chat
+- Archive Epic 7, mark Epic 8 as complete in backlog
+- Consider next: Phase 3 (email pipeline), `CHAT_MODEL` config, conversation memory, voice I/O
+
+---
+
+## Session: 2026-02-25 (session 11)
+
+### What was done
+- Completed **Epic 7** (S7.3, S7.4, S7.5) — Search Reliability & Smoke Testing is now fully done
+
+#### S7.5 — Paperless Connection Drop Handling
+- **Retry logic** (`corvus/integrations/paperless.py`): Added `_retry_on_disconnect()` helper — retries async calls up to `MAX_RETRIES=2` times with 1s delay on `httpx.RemoteProtocolError`. Applied to 5 methods: `_get`, `_patch`, `list_documents`, `upload_document`, `download_document` (each refactored into public method + `_raw` internal, with retry wrapping the raw call). `_get_all_pages` inherits retry via `_get`.
+- **CLI error handling** (`corvus/cli.py`): Added `import httpx` and try/except blocks to `_tag_async`, `_fetch_async`, `_review_async`, `_watch_async` catching `RemoteProtocolError` ("Lost connection to Paperless") and `HTTPStatusError` (shows status code). All exit with code 1 and clean error message.
+
+#### S7.3 — Complete ask/chat Test Coverage
+- 7 new tests in `tests/test_cli.py`:
+  - `test_ask_tag_intent` — TAG_DOCUMENTS returns TagPipelineResult, asserts "Tagging complete" + counts
+  - `test_ask_digest_intent` — SHOW_DIGEST returns DigestResult, asserts rendered text
+  - `test_ask_fetch_no_results` — FETCH_DOCUMENT with 0 docs, asserts "0 document(s)"
+  - `test_ask_fetch_multi_select` — FETCH_DOCUMENT with 3 docs, user selects "2", asserts webbrowser.open with doc 2
+  - `test_ask_watch_folder_intent` — WATCH_FOLDER returns INTERACTIVE_REQUIRED, asserts "corvus watch"
+  - `test_chat_fetch_inline` — Chat with FETCH_DOCUMENT, docs displayed inline (no selection), then quit
+  - `test_ask_dispatch_error` — dispatch raises RemoteProtocolError, asserts "Failed to complete request" + exit 1
+- 2 new S7.5 CLI error tests:
+  - `test_tag_paperless_connection_error` — run_tag_pipeline raises RemoteProtocolError, clean error + exit 1
+  - `test_fetch_paperless_connection_error` — run_fetch_pipeline raises RemoteProtocolError, clean error + exit 1
+
+#### S7.4 — Chat Model Recommendation
+- Researched Ollama-available models; recommended `qwen2.5:14b-instruct` for GENERAL_CHAT
+- Rationale: meaningful conversation quality uplift over 7B, ~10-11 GB VRAM (Q4_K_M), same model family as existing instruct model, ~5-10s cold load on RTX 4090
+- Keep `qwen2.5:7b-instruct` for structured output tasks (classification, extraction)
+- Alternatives evaluated: 32b (tight VRAM), gemma2:27b (verbose), mistral-small:22b (trails Qwen), phi-4:14b (stiff), Llama 3.x (no 14B option)
+- No code changes — recommendation documented in backlog
+
+### Test summary
+- **11 new tests**: 9 in `test_cli.py` (7 S7.3 + 2 S7.5), 2 in `test_paperless_client.py` (retry)
+- **All 265 tests passing** (259 fast + 6 slow/skipped)
+- Note: `test_paperless_client.py` restructured — unit tests (retry) always run, integration tests use per-test `@_skip_no_paperless` marker instead of module-level `pytestmark`
+
+### Files changed
+| File | Change |
+|------|--------|
+| `corvus/integrations/paperless.py` | `_retry_on_disconnect()`, 5 methods wrapped with retry |
+| `corvus/cli.py` | `import httpx`, try/except in 4 async entry points |
+| `tests/test_cli.py` | 9 new tests (7 S7.3 + 2 S7.5) |
+| `tests/test_paperless_client.py` | 2 new retry tests, restructured skip markers |
+| `docs/backlog_current.md` | S7.3, S7.4, S7.5 marked complete |
+
+### Current state
+- **Epics 1–7:** Complete (Epic 7 ready to archive)
+- **All tests passing:** 265 total
+- **Test breakdown:**
+  - `test_cli.py` — 48
+  - `test_intent_classifier.py` — 11 (1 slow)
+  - `test_pipeline_handlers.py` — 14
+  - `test_orchestrator_router.py` — 11
+  - `test_query_interpreter.py` — 27 (1 slow)
+  - `test_retrieval_router.py` — 39
+  - `test_paperless_client.py` — 6 (4 integration)
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### Next steps
+- Archive Epic 7 to `docs/backlog_archive.md`
+- Implement `CHAT_MODEL` config variable + `qwen2.5:14b-instruct` for `GENERAL_CHAT` (follow-up from S7.4)
+- Consider next epic: Phase 3 (email pipeline), voice I/O, web dashboard, or `corvus chat` conversation memory
+
+---
+
 ## Session: 2026-02-25 (session 10)
 
 ### What was done

@@ -17,6 +17,7 @@ from corvus.schemas.orchestrator import (
     FetchPipelineResult,
     StatusResult,
     TagPipelineResult,
+    WebSearchResult,
 )
 from corvus.schemas.paperless import (
     PaperlessCorrespondent,
@@ -528,3 +529,122 @@ def test_digest_pipeline_custom_hours(tmp_path):
 
     assert isinstance(result, DigestResult)
     assert "Corvus Daily Digest" in result.rendered_text
+
+
+# ------------------------------------------------------------------
+# run_search_pipeline
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_returns_summary():
+    """Search pipeline returns WebSearchResult with summary and sources."""
+    from corvus.integrations.search import SearchResult
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_search_results = [
+        SearchResult(title="Weather NYC", url="https://weather.com/nyc", snippet="Sunny 72F"),
+        SearchResult(title="NYC Forecast", url="https://forecast.io/nyc", snippet="Clear skies"),
+    ]
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("It's sunny and 72F in NYC [1].", MagicMock())
+
+    with patch(
+        "corvus.integrations.search.web_search",
+        new_callable=AsyncMock,
+        return_value=mock_search_results,
+    ):
+        result = await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="weather in NYC",
+        )
+
+    assert isinstance(result, WebSearchResult)
+    assert "72F" in result.summary
+    assert len(result.sources) == 2
+    assert result.sources[0].title == "Weather NYC"
+    assert result.sources[0].url == "https://weather.com/nyc"
+    assert result.query == "weather in NYC"
+    mock_ollama.chat.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_no_results_fallback():
+    """Search pipeline falls back to LLM when no results found."""
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("Search unavailable. Based on my knowledge...", MagicMock())
+
+    with patch(
+        "corvus.integrations.search.web_search",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        result = await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="weather in NYC",
+        )
+
+    assert isinstance(result, WebSearchResult)
+    assert result.sources == []
+    assert result.query == "weather in NYC"
+    mock_ollama.chat.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_search_error_fallback():
+    """Search pipeline falls back to LLM on SearchError."""
+    from corvus.integrations.search import SearchError
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("Search unavailable. Here's what I know...", MagicMock())
+
+    with patch(
+        "corvus.integrations.search.web_search",
+        new_callable=AsyncMock,
+        side_effect=SearchError("DuckDuckGo down"),
+    ):
+        result = await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="weather in NYC",
+        )
+
+    assert isinstance(result, WebSearchResult)
+    assert result.sources == []
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_progress_messages():
+    """Search pipeline emits progress messages."""
+    from corvus.integrations.search import SearchResult
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_search_results = [
+        SearchResult(title="Result", url="https://example.com", snippet="Snippet"),
+    ]
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("Summary.", MagicMock())
+
+    progress = []
+
+    with patch(
+        "corvus.integrations.search.web_search",
+        new_callable=AsyncMock,
+        return_value=mock_search_results,
+    ):
+        await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="test query",
+            on_progress=progress.append,
+        )
+
+    assert any("Searching" in msg for msg in progress)
+    assert any("summarizing" in msg for msg in progress)

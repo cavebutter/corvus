@@ -48,6 +48,10 @@ WATCHDOG_HASH_DB_PATH: str = _internal.get(
 )
 
 
+# --- Web Search ---
+WEB_SEARCH_MAX_RESULTS: int = int(_internal.get("WEB_SEARCH_MAX_RESULTS", "5"))
+
+
 def load_external() -> dict[str, str | None]:
     """Load external secrets on demand. Only call when needed (Phase 3+)."""
     return _load("external")

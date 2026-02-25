@@ -16,6 +16,7 @@ import logging
 import sys
 
 import click
+import httpx
 
 from corvus.config import (
     AUDIT_LOG_PATH,
@@ -125,24 +126,31 @@ async def _tag_async(
     from corvus.integrations.paperless import PaperlessClient
     from corvus.orchestrator.pipelines import run_tag_pipeline
 
-    async with (
-        PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
-        OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
-    ):
-        model = await _resolve_model(ollama, model)
+    try:
+        async with (
+            PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
+            OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
+        ):
+            model = await _resolve_model(ollama, model)
 
-        await run_tag_pipeline(
-            paperless=paperless,
-            ollama=ollama,
-            model=model,
-            limit=limit,
-            include_tagged=include_tagged,
-            keep_alive=keep_alive,
-            force_queue=force_queue,
-            queue_db_path=QUEUE_DB_PATH,
-            audit_log_path=AUDIT_LOG_PATH,
-            on_progress=click.echo,
-        )
+            await run_tag_pipeline(
+                paperless=paperless,
+                ollama=ollama,
+                model=model,
+                limit=limit,
+                include_tagged=include_tagged,
+                keep_alive=keep_alive,
+                force_queue=force_queue,
+                queue_db_path=QUEUE_DB_PATH,
+                audit_log_path=AUDIT_LOG_PATH,
+                on_progress=click.echo,
+            )
+    except httpx.RemoteProtocolError:
+        click.echo("\nError: Lost connection to Paperless. Check that the server is running.", err=True)
+        sys.exit(1)
+    except httpx.HTTPStatusError as exc:
+        click.echo(f"\nError: Paperless returned {exc.response.status_code}.", err=True)
+        sys.exit(1)
 
 
 # ------------------------------------------------------------------
@@ -165,88 +173,95 @@ async def _review_async() -> None:
 
     audit_log = AuditLog(AUDIT_LOG_PATH)
 
-    with ReviewQueue(QUEUE_DB_PATH) as review_queue:
-        pending = review_queue.list_pending()
-        if not pending:
-            click.echo("No pending items to review.")
-            return
+    try:
+        with ReviewQueue(QUEUE_DB_PATH) as review_queue:
+            pending = review_queue.list_pending()
+            if not pending:
+                click.echo("No pending items to review.")
+                return
 
-        click.echo(f"Found {len(pending)} pending item(s).\n")
+            click.echo(f"Found {len(pending)} pending item(s).\n")
 
-        approved = 0
-        rejected = 0
-        skipped = 0
+            approved = 0
+            rejected = 0
+            skipped = 0
 
-        async with PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless:
-            for i, item in enumerate(pending, 1):
-                task = item.task
-                click.echo(f"--- [{i}/{len(pending)}] Document {task.document_id}: {task.document_title} ---")
-                click.echo(f"  Confidence: {task.overall_confidence:.0%}")
-                click.echo(f"  Tags: {[t.tag_name for t in task.result.suggested_tags]}")
-                if task.result.suggested_correspondent:
-                    click.echo(f"  Correspondent: {task.result.suggested_correspondent}")
-                if task.result.suggested_document_type:
-                    click.echo(f"  Type: {task.result.suggested_document_type}")
-                click.echo(f"  Reasoning: {task.result.reasoning}")
-                snippet = task.content_snippet
-                if snippet:
-                    click.echo(f"  Snippet: {snippet[:200]}{'...' if len(snippet) > 200 else ''}")
+            async with PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless:
+                for i, item in enumerate(pending, 1):
+                    task = item.task
+                    click.echo(f"--- [{i}/{len(pending)}] Document {task.document_id}: {task.document_title} ---")
+                    click.echo(f"  Confidence: {task.overall_confidence:.0%}")
+                    click.echo(f"  Tags: {[t.tag_name for t in task.result.suggested_tags]}")
+                    if task.result.suggested_correspondent:
+                        click.echo(f"  Correspondent: {task.result.suggested_correspondent}")
+                    if task.result.suggested_document_type:
+                        click.echo(f"  Type: {task.result.suggested_document_type}")
+                    click.echo(f"  Reasoning: {task.result.reasoning}")
+                    snippet = task.content_snippet
+                    if snippet:
+                        click.echo(f"  Snippet: {snippet[:200]}{'...' if len(snippet) > 200 else ''}")
 
-                choice = click.prompt(
-                    "  Action",
-                    type=click.Choice(["a", "e", "r", "s", "q"], case_sensitive=False),
-                    prompt_suffix=" [a]pprove / [e]dit / [r]eject / [s]kip / [q]uit: ",
-                )
+                    choice = click.prompt(
+                        "  Action",
+                        type=click.Choice(["a", "e", "r", "s", "q"], case_sensitive=False),
+                        prompt_suffix=" [a]pprove / [e]dit / [r]eject / [s]kip / [q]uit: ",
+                    )
 
-                if choice in ("a", "e"):
-                    extra_tag_names: list[str] = []
-                    if choice == "e":
-                        raw = click.prompt(
-                            "  Add tags (comma-separated)", default="", show_default=False
-                        )
-                        extra_tag_names = [
-                            t.strip() for t in raw.split(",") if t.strip()
-                        ]
-                        if not extra_tag_names:
-                            click.echo("  (no tags entered, approving as-is)")
-
-                    try:
-                        result = await apply_approved_update(
-                            item,
-                            paperless=paperless,
-                            extra_tag_names=extra_tag_names or None,
-                        )
-                        if extra_tag_names:
-                            notes = f"Modified via CLI; added tags: {extra_tag_names}"
-                            review_queue.modify(item.id, notes=notes)
-                        else:
-                            notes = "Approved via CLI"
-                            review_queue.approve(item.id, notes=notes)
-                        audit_log.log_review_approved(item.task, result.proposed_update)
-                        if extra_tag_names:
-                            click.echo(
-                                f"  -> Approved with extra tags {extra_tag_names} and applied to Paperless."
+                    if choice in ("a", "e"):
+                        extra_tag_names: list[str] = []
+                        if choice == "e":
+                            raw = click.prompt(
+                                "  Add tags (comma-separated)", default="", show_default=False
                             )
-                        else:
-                            click.echo("  -> Approved and applied to Paperless.")
-                        approved += 1
-                    except Exception:
-                        logger.exception("Error applying update for document %d", task.document_id)
-                        click.echo("  -> ERROR: Failed to apply. Item remains pending.", err=True)
-                elif choice == "r":
-                    notes = click.prompt("  Rejection notes (optional)", default="", show_default=False)
-                    review_queue.reject(item.id, notes=notes or None)
-                    audit_log.log_review_rejected(item.task, item.proposed_update)
-                    click.echo("  -> Rejected.")
-                    rejected += 1
-                elif choice == "s":
-                    click.echo("  -> Skipped.")
-                    skipped += 1
-                elif choice == "q":
-                    click.echo("  -> Quitting review.")
-                    break
+                            extra_tag_names = [
+                                t.strip() for t in raw.split(",") if t.strip()
+                            ]
+                            if not extra_tag_names:
+                                click.echo("  (no tags entered, approving as-is)")
 
-        click.echo(f"\nReview complete. Approved: {approved}, Rejected: {rejected}, Skipped: {skipped}")
+                        try:
+                            result = await apply_approved_update(
+                                item,
+                                paperless=paperless,
+                                extra_tag_names=extra_tag_names or None,
+                            )
+                            if extra_tag_names:
+                                notes = f"Modified via CLI; added tags: {extra_tag_names}"
+                                review_queue.modify(item.id, notes=notes)
+                            else:
+                                notes = "Approved via CLI"
+                                review_queue.approve(item.id, notes=notes)
+                            audit_log.log_review_approved(item.task, result.proposed_update)
+                            if extra_tag_names:
+                                click.echo(
+                                    f"  -> Approved with extra tags {extra_tag_names} and applied to Paperless."
+                                )
+                            else:
+                                click.echo("  -> Approved and applied to Paperless.")
+                            approved += 1
+                        except Exception:
+                            logger.exception("Error applying update for document %d", task.document_id)
+                            click.echo("  -> ERROR: Failed to apply. Item remains pending.", err=True)
+                    elif choice == "r":
+                        notes = click.prompt("  Rejection notes (optional)", default="", show_default=False)
+                        review_queue.reject(item.id, notes=notes or None)
+                        audit_log.log_review_rejected(item.task, item.proposed_update)
+                        click.echo("  -> Rejected.")
+                        rejected += 1
+                    elif choice == "s":
+                        click.echo("  -> Skipped.")
+                        skipped += 1
+                    elif choice == "q":
+                        click.echo("  -> Quitting review.")
+                        break
+
+            click.echo(f"\nReview complete. Approved: {approved}, Rejected: {rejected}, Skipped: {skipped}")
+    except httpx.RemoteProtocolError:
+        click.echo("\nError: Lost connection to Paperless. Check that the server is running.", err=True)
+        sys.exit(1)
+    except httpx.HTTPStatusError as exc:
+        click.echo(f"\nError: Paperless returned {exc.response.status_code}.", err=True)
+        sys.exit(1)
 
 
 # ------------------------------------------------------------------
@@ -412,6 +427,12 @@ async def _watch_async(
                 click.echo(f"  Patterns: {file_patterns}")
                 await watch_folder(scan_path, **kwargs)
 
+        except httpx.RemoteProtocolError:
+            click.echo("\nError: Lost connection to Paperless. Check that the server is running.", err=True)
+            sys.exit(1)
+        except httpx.HTTPStatusError as exc:
+            click.echo(f"\nError: Paperless returned {exc.response.status_code}.", err=True)
+            sys.exit(1)
         finally:
             if paperless_client:
                 await paperless_client.close()
@@ -471,74 +492,81 @@ async def _fetch_async(
 
     delivery = DeliveryMethod(method)
 
-    async with (
-        PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
-        OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
-    ):
-        model = await _resolve_model(ollama, model)
-
-        result = await run_fetch_pipeline(
-            paperless=paperless,
-            ollama=ollama,
-            model=model,
-            query=query,
-            keep_alive=keep_alive,
-            on_progress=click.echo,
-        )
-
-        # Low confidence check
-        if result.interpretation_confidence < 0.5 and not click.confirm(
-            "\nLow confidence. Continue?", default=False
+    try:
+        async with (
+            PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
+            OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
         ):
-            click.echo("Aborted.")
-            return
+            model = await _resolve_model(ollama, model)
 
-        # Display results and deliver
-        if result.documents_found == 0:
-            click.echo("\nNo documents found.")
-            return
-
-        click.echo(f"\nFound {result.documents_found} document(s).")
-        docs = result.documents
-
-        if len(docs) == 1 and result.documents_found == 1:
-            doc = docs[0]
-            click.echo(_format_doc_line(1, doc))
-            selected = doc
-        else:
-            display_count = min(len(docs), 10)
-            for i, doc in enumerate(docs[:display_count], 1):
-                click.echo(_format_doc_line(i, doc))
-
-            if result.documents_found > display_count:
-                click.echo(f"  ... and {result.documents_found - display_count} more. Consider refining your query.")
-
-            raw_choice = click.prompt(
-                "\nSelect", prompt_suffix=f" [1-{display_count}, q to quit]: "
+            result = await run_fetch_pipeline(
+                paperless=paperless,
+                ollama=ollama,
+                model=model,
+                query=query,
+                keep_alive=keep_alive,
+                on_progress=click.echo,
             )
-            if raw_choice.strip().lower() == "q":
+
+            # Low confidence check
+            if result.interpretation_confidence < 0.5 and not click.confirm(
+                "\nLow confidence. Continue?", default=False
+            ):
                 click.echo("Aborted.")
                 return
 
-            try:
-                idx = int(raw_choice) - 1
-                if idx < 0 or idx >= display_count:
-                    raise ValueError
-                selected = docs[idx]
-            except (ValueError, IndexError):
-                click.echo("Invalid selection.", err=True)
-                sys.exit(1)
+            # Display results and deliver
+            if result.documents_found == 0:
+                click.echo("\nNo documents found.")
+                return
 
-        # Deliver
-        if delivery == DeliveryMethod.BROWSER:
-            url = paperless.get_document_url(selected["id"])
-            click.echo(f"Opening: {url}")
-            webbrowser.open(url)
-        else:
-            dest_dir = Path(download_dir) if download_dir else Path.home() / "Downloads"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            path = await paperless.download_document(selected["id"], dest_dir)
-            click.echo(f"Downloaded: {path}")
+            click.echo(f"\nFound {result.documents_found} document(s).")
+            docs = result.documents
+
+            if len(docs) == 1 and result.documents_found == 1:
+                doc = docs[0]
+                click.echo(_format_doc_line(1, doc))
+                selected = doc
+            else:
+                display_count = min(len(docs), 10)
+                for i, doc in enumerate(docs[:display_count], 1):
+                    click.echo(_format_doc_line(i, doc))
+
+                if result.documents_found > display_count:
+                    click.echo(f"  ... and {result.documents_found - display_count} more. Consider refining your query.")
+
+                raw_choice = click.prompt(
+                    "\nSelect", prompt_suffix=f" [1-{display_count}, q to quit]: "
+                )
+                if raw_choice.strip().lower() == "q":
+                    click.echo("Aborted.")
+                    return
+
+                try:
+                    idx = int(raw_choice) - 1
+                    if idx < 0 or idx >= display_count:
+                        raise ValueError
+                    selected = docs[idx]
+                except (ValueError, IndexError):
+                    click.echo("Invalid selection.", err=True)
+                    sys.exit(1)
+
+            # Deliver
+            if delivery == DeliveryMethod.BROWSER:
+                url = paperless.get_document_url(selected["id"])
+                click.echo(f"Opening: {url}")
+                webbrowser.open(url)
+            else:
+                dest_dir = Path(download_dir) if download_dir else Path.home() / "Downloads"
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                path = await paperless.download_document(selected["id"], dest_dir)
+                click.echo(f"Downloaded: {path}")
+    except httpx.RemoteProtocolError:
+        click.echo("\nError: Lost connection to Paperless. Check that the server is running.", err=True)
+        sys.exit(1)
+    except httpx.HTTPStatusError as exc:
+        click.echo(f"\nError: Paperless returned {exc.response.status_code}.", err=True)
+        sys.exit(1)
 
 
 # ------------------------------------------------------------------
@@ -653,6 +681,7 @@ def _render_orchestrator_response(response) -> None:
         OrchestratorAction,
         StatusResult,
         TagPipelineResult,
+        WebSearchResult,
     )
 
     if response.action == OrchestratorAction.NEEDS_CLARIFICATION:
@@ -686,6 +715,13 @@ def _render_orchestrator_response(response) -> None:
             click.echo(f"  Reviewed (24h):     {result.reviewed_24h}")
         elif isinstance(result, DigestResult):
             click.echo(result.rendered_text)
+        elif isinstance(result, WebSearchResult):
+            click.echo(f"\n{result.summary}")
+            if result.sources:
+                click.echo("\nSources:")
+                for i, src in enumerate(result.sources, 1):
+                    click.echo(f"  [{i}] {src.title}")
+                    click.echo(f"      {src.url}")
 
 
 # ------------------------------------------------------------------

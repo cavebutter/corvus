@@ -128,6 +128,23 @@ class TestClassifyIntent:
 
         assert result.intent == Intent.GENERAL_CHAT
 
+    async def test_web_search_intent(self):
+        """Classifies web search requests."""
+        mock_classification = _mock_classification(
+            Intent.WEB_SEARCH, search_query="weather in NYC",
+        )
+        mock_ollama = AsyncMock(spec=OllamaClient)
+        mock_ollama.generate_structured.return_value = (mock_classification, _mock_raw())
+
+        result, _raw = await classify_intent(
+            "what's the weather in NYC",
+            ollama=mock_ollama,
+            model="gemma3",
+        )
+
+        assert result.intent == Intent.WEB_SEARCH
+        assert result.search_query == "weather in NYC"
+
     async def test_low_confidence(self):
         """Low confidence classification is passed through."""
         mock_classification = _mock_classification(Intent.FETCH_DOCUMENT, confidence=0.4)

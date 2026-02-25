@@ -45,7 +45,12 @@ fetch_delivery_method ("browser" or "download", optional)
    Examples: "watch my scan folder", "start the file watcher"
    No params.
 
-7. **general_chat** — Anything else: greetings, questions, conversation.
+7. **web_search** — User wants information requiring current/external knowledge.
+   Examples: "what's the weather in NYC", "latest Python 3.13 features", \
+"who won the Super Bowl", "search for best NAS setup"
+   Params: search_query (str, required — preserve the user's query language)
+
+8. **general_chat** — Anything else: greetings, questions, conversation.
    Examples: "hello", "what can you do?", "tell me a joke"
    No params.
 
@@ -59,6 +64,11 @@ Do NOT rewrite or interpret them — the downstream search pipeline handles that
 genuinely ambiguous.
 4. Provide brief reasoning explaining your classification.
 5. Only extract parameters that are explicitly mentioned or clearly implied.
+6. For web_search, copy the user's query into search_query as-is. Classify as \
+web_search when the answer requires real-time information, current events, \
+factual knowledge beyond the document system, or the user explicitly says \
+"search" or "look up".
+7. When ambiguous between web_search and general_chat, prefer general_chat.
 """
 
 USER_PROMPT = """\

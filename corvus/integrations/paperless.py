@@ -1,9 +1,12 @@
 """Async client for the Paperless-ngx REST API."""
 
+import asyncio
 import logging
 from pathlib import Path
 
 import httpx
+
+from httpx import RemoteProtocolError
 
 from corvus.schemas.paperless import (
     PaperlessCorrespondent,
@@ -13,6 +16,28 @@ from corvus.schemas.paperless import (
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 2
+RETRY_DELAY = 1.0
+
+
+async def _retry_on_disconnect(coro_fn, *args, **kwargs):
+    """Retry an async call on ``RemoteProtocolError`` (server disconnect).
+
+    Retries up to ``MAX_RETRIES`` times with a fixed delay between attempts.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return await coro_fn(*args, **kwargs)
+        except RemoteProtocolError:
+            if attempt == MAX_RETRIES:
+                raise
+            logger.warning(
+                "Connection dropped (attempt %d/%d), retrying...",
+                attempt + 1,
+                MAX_RETRIES,
+            )
+            await asyncio.sleep(RETRY_DELAY)
 
 
 class PaperlessClient:
@@ -49,13 +74,19 @@ class PaperlessClient:
     # ------------------------------------------------------------------
 
     async def _get(self, path: str, params: dict | None = None) -> dict:
-        """GET a JSON endpoint. Raises on non-2xx status."""
+        """GET a JSON endpoint. Retries on connection drop."""
+        return await _retry_on_disconnect(self._get_raw, path, params=params)
+
+    async def _get_raw(self, path: str, params: dict | None = None) -> dict:
         response = await self._client.get(path, params=params)
         response.raise_for_status()
         return response.json()
 
     async def _patch(self, path: str, payload: dict) -> dict:
-        """PATCH a JSON endpoint. Raises on non-2xx status."""
+        """PATCH a JSON endpoint. Retries on connection drop."""
+        return await _retry_on_disconnect(self._patch_raw, path, payload)
+
+    async def _patch_raw(self, path: str, payload: dict) -> dict:
         response = await self._client.patch(path, json=payload)
         response.raise_for_status()
         return response.json()
@@ -103,6 +134,9 @@ class PaperlessClient:
         params: dict = {"page": page, "page_size": page_size, "ordering": ordering}
         if filter_params:
             params.update(filter_params)
+        return await _retry_on_disconnect(self._list_documents_raw, params)
+
+    async def _list_documents_raw(self, params: dict) -> tuple[list[PaperlessDocument], int]:
         response = await self._client.get("/api/documents/", params=params)
         # Paperless returns 404 for pages beyond the last — treat as empty.
         if response.status_code == 404:
@@ -135,6 +169,11 @@ class PaperlessClient:
         Returns:
             The Paperless task UUID (string).
         """
+        return await _retry_on_disconnect(self._upload_document_raw, file_path, title=title)
+
+    async def _upload_document_raw(
+        self, file_path: str | Path, *, title: str | None = None
+    ) -> str:
         path = Path(file_path)
         data = {}
         if title:
@@ -162,6 +201,9 @@ class PaperlessClient:
         Returns:
             Path to the downloaded file.
         """
+        return await _retry_on_disconnect(self._download_document_raw, doc_id, dest_path)
+
+    async def _download_document_raw(self, doc_id: int, dest_path: str | Path) -> Path:
         dest = Path(dest_path)
         response = await self._client.get(f"/api/documents/{doc_id}/download/")
         response.raise_for_status()

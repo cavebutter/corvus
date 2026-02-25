@@ -18,6 +18,7 @@ class Intent(StrEnum):
     SHOW_DIGEST = "show_digest"
     SHOW_STATUS = "show_status"
     WATCH_FOLDER = "watch_folder"
+    WEB_SEARCH = "web_search"
     GENERAL_CHAT = "general_chat"
 
 
@@ -59,6 +60,12 @@ class IntentClassification(BaseModel):
     digest_hours: int | None = Field(
         default=None,
         description="Lookback period in hours for digest",
+    )
+
+    # WEB_SEARCH params
+    search_query: str | None = Field(
+        default=None,
+        description="Search query to pass to the web search engine",
     )
 
 
@@ -105,6 +112,22 @@ class DigestResult(BaseModel):
     rendered_text: str
 
 
+class WebSearchSource(BaseModel):
+    """A single web search result source."""
+
+    title: str
+    url: str
+    snippet: str
+
+
+class WebSearchResult(BaseModel):
+    """Result from the web search pipeline handler."""
+
+    summary: str
+    sources: list[WebSearchSource] = Field(default_factory=list)
+    query: str
+
+
 # --- Orchestrator Response ---
 
 
@@ -125,4 +148,7 @@ class OrchestratorResponse(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     message: str = ""
     clarification_prompt: str | None = None
-    result: TagPipelineResult | FetchPipelineResult | StatusResult | DigestResult | None = None
+    result: (
+        TagPipelineResult | FetchPipelineResult | StatusResult | DigestResult
+        | WebSearchResult | None
+    ) = None

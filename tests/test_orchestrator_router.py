@@ -13,6 +13,7 @@ from corvus.schemas.orchestrator import (
     OrchestratorAction,
     StatusResult,
     TagPipelineResult,
+    WebSearchResult,
 )
 
 # ------------------------------------------------------------------
@@ -281,3 +282,67 @@ async def test_dispatch_general_chat(tmp_path):
     assert response.intent == Intent.GENERAL_CHAT
     assert "Corvus" in response.message
     kwargs["ollama"].chat.assert_called_once()
+
+
+# ------------------------------------------------------------------
+# WEB_SEARCH
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_web_search(tmp_path):
+    """WEB_SEARCH dispatches to search pipeline with search_query."""
+    classification = _make_classification(
+        Intent.WEB_SEARCH, search_query="weather in NYC",
+    )
+    mock_result = WebSearchResult(
+        summary="It's sunny in NYC.",
+        sources=[],
+        query="weather in NYC",
+    )
+
+    with patch(
+        "corvus.orchestrator.pipelines.run_search_pipeline",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ) as mock_pipeline:
+        response = await dispatch(
+            classification,
+            user_input="what's the weather in NYC",
+            **_make_dispatch_kwargs(tmp_path),
+        )
+
+    assert response.action == OrchestratorAction.DISPATCHED
+    assert response.intent == Intent.WEB_SEARCH
+    assert isinstance(response.result, WebSearchResult)
+    assert response.result.summary == "It's sunny in NYC."
+    mock_pipeline.assert_called_once()
+    assert mock_pipeline.call_args.kwargs["query"] == "weather in NYC"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_web_search_no_query_uses_input(tmp_path):
+    """WEB_SEARCH falls back to user_input when search_query is None."""
+    classification = _make_classification(
+        Intent.WEB_SEARCH, search_query=None,
+    )
+    mock_result = WebSearchResult(
+        summary="Here are the results.",
+        sources=[],
+        query="latest news",
+    )
+
+    with patch(
+        "corvus.orchestrator.pipelines.run_search_pipeline",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ) as mock_pipeline:
+        response = await dispatch(
+            classification,
+            user_input="latest news",
+            **_make_dispatch_kwargs(tmp_path),
+        )
+
+    assert response.action == OrchestratorAction.DISPATCHED
+    mock_pipeline.assert_called_once()
+    assert mock_pipeline.call_args.kwargs["query"] == "latest news"

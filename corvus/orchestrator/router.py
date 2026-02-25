@@ -116,6 +116,13 @@ async def dispatch(
             audit_log_path=audit_log_path, confidence=confidence,
         )
 
+    if intent == Intent.WEB_SEARCH:
+        return await _dispatch_search(
+            classification, user_input=user_input,
+            ollama=ollama, model=model, keep_alive=keep_alive,
+            on_progress=on_progress,
+        )
+
     if intent == Intent.GENERAL_CHAT:
         return await _dispatch_chat(
             user_input, ollama=ollama, model=model, keep_alive=keep_alive,
@@ -244,6 +251,37 @@ def _dispatch_digest(
         action=OrchestratorAction.DISPATCHED,
         intent=Intent.SHOW_DIGEST,
         confidence=confidence,
+        result=result,
+    )
+
+
+async def _dispatch_search(
+    classification: IntentClassification,
+    *,
+    user_input: str,
+    ollama: OllamaClient,
+    model: str,
+    keep_alive: str,
+    on_progress: Callable[[str], None] | None,
+) -> OrchestratorResponse:
+    from corvus.config import WEB_SEARCH_MAX_RESULTS
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    query = classification.search_query or user_input
+
+    result = await run_search_pipeline(
+        ollama=ollama,
+        model=model,
+        query=query,
+        keep_alive=keep_alive,
+        max_results=WEB_SEARCH_MAX_RESULTS,
+        on_progress=on_progress,
+    )
+
+    return OrchestratorResponse(
+        action=OrchestratorAction.DISPATCHED,
+        intent=Intent.WEB_SEARCH,
+        confidence=classification.confidence,
         result=result,
     )
 

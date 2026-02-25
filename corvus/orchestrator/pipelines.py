@@ -16,6 +16,8 @@ from corvus.schemas.orchestrator import (
     FetchPipelineResult,
     StatusResult,
     TagPipelineResult,
+    WebSearchResult,
+    WebSearchSource,
 )
 
 logger = logging.getLogger(__name__)
@@ -344,3 +346,119 @@ def run_digest_pipeline(
         d = generate_digest(audit_log, review_queue, hours=hours)
 
     return DigestResult(rendered_text=render_text(d))
+
+
+async def run_search_pipeline(
+    *,
+    ollama: OllamaClient,
+    model: str,
+    query: str,
+    keep_alive: str = "5m",
+    max_results: int = 5,
+    on_progress: Callable[[str], None] | None = None,
+) -> WebSearchResult:
+    """Run the web search pipeline.
+
+    Searches DuckDuckGo, then uses an LLM to summarize the results
+    with source citations.
+
+    Args:
+        ollama: An open OllamaClient instance.
+        model: Ollama model name.
+        query: Search query string.
+        keep_alive: Ollama keep_alive duration.
+        max_results: Maximum number of search results.
+        on_progress: Optional callback for progress messages.
+
+    Returns:
+        WebSearchResult with summary, sources, and query.
+    """
+    from corvus.integrations.search import SearchError, web_search
+
+    def _emit(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    _emit(f'Searching: "{query}"')
+
+    # Step 1: Web search
+    try:
+        results = await web_search(query, max_results=max_results)
+    except SearchError:
+        logger.exception("Web search failed for query: %s", query)
+        return await _search_fallback_chat(
+            ollama=ollama, model=model, query=query, keep_alive=keep_alive,
+        )
+
+    if not results:
+        _emit("No search results found, falling back to LLM.")
+        return await _search_fallback_chat(
+            ollama=ollama, model=model, query=query, keep_alive=keep_alive,
+        )
+
+    # Step 2: Build context for LLM summarization
+    context_lines = []
+    for i, r in enumerate(results, 1):
+        context_lines.append(f"[{i}] {r.title}")
+        context_lines.append(f"    URL: {r.url}")
+        context_lines.append(f"    Snippet: {r.snippet}")
+    context = "\n".join(context_lines)
+
+    _emit(f"Found {len(results)} result(s), summarizing...")
+
+    system_prompt = (
+        "You are Corvus, a helpful AI assistant. Your job is to answer the user's "
+        "question using ONLY the search result snippets provided below.\n\n"
+        "Rules:\n"
+        "- Extract and state specific facts, numbers, and data from the snippets.\n"
+        "- Give a direct answer first, then add context if needed.\n"
+        "- Cite sources by number in square brackets (e.g. [1], [2]).\n"
+        "- If the snippets don't contain enough data to fully answer, say what you "
+        "found and note what's missing — do NOT tell the user to visit the websites.\n"
+        "- Never invent data not present in the snippets.\n"
+        "- Be concise: 2-4 sentences max."
+    )
+    user_prompt = f"Question: {query}\n\nSearch results:\n{context}"
+
+    text, _raw = await ollama.chat(
+        model=model,
+        system=system_prompt,
+        prompt=user_prompt,
+        keep_alive=keep_alive,
+        temperature=0.3,
+    )
+
+    sources = [
+        WebSearchSource(title=r.title, url=r.url, snippet=r.snippet)
+        for r in results
+    ]
+
+    return WebSearchResult(summary=text, sources=sources, query=query)
+
+
+async def _search_fallback_chat(
+    *,
+    ollama: OllamaClient,
+    model: str,
+    query: str,
+    keep_alive: str,
+) -> WebSearchResult:
+    """Fallback when web search is unavailable — LLM-only answer with disclaimer.
+
+    Returns:
+        WebSearchResult with LLM answer and no sources.
+    """
+    system_prompt = (
+        "You are Corvus, a helpful AI assistant. Web search is currently unavailable. "
+        "Answer the user's question to the best of your ability based on your training "
+        "data. Start your response with a brief note that search results were unavailable."
+    )
+
+    text, _raw = await ollama.chat(
+        model=model,
+        system=system_prompt,
+        prompt=query,
+        keep_alive=keep_alive,
+    )
+
+    return WebSearchResult(summary=text, sources=[], query=query)

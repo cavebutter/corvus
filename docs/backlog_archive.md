@@ -87,3 +87,15 @@
 - [x] **S6.3** Pipeline handlers + CLI refactor (`corvus/orchestrator/pipelines.py`) — extracted `run_tag_pipeline()`, `run_fetch_pipeline()`, `run_status_pipeline()`, `run_digest_pipeline()` from CLI; CLI commands now call handlers with `on_progress=click.echo`; 13 tests
 - [x] **S6.4** Orchestrator router + `OllamaClient.chat()` (`corvus/orchestrator/router.py`, `corvus/integrations/ollama.py`) — deterministic `dispatch()` function: confidence gate (< 0.7 → clarify), interactive-required for review/watch, pipeline dispatch for tag/fetch/status/digest, free-form chat for general conversation; 11 tests
 - [x] **S6.5** CLI: `corvus ask` + `corvus chat` commands — `ask` for single NL query (classify → dispatch → render), `chat` for interactive REPL (stateless per turn); shared `_render_orchestrator_response()` helper; 13 new CLI tests
+
+---
+
+## Epic 7: Search Reliability & Smoke Testing
+
+**Goal:** Fix query interpreter reliability issues discovered during Epic 6 smoke testing. The LLM sometimes returns high confidence but empty search fields, causing Paperless to return all documents unfiltered.
+
+- [x] **S7.1** Improve query interpreter field extraction — added `_has_search_fields()` post-validation: when LLM returns high confidence but no search fields populated, inject original query as `text_search` fallback.
+- [x] **S7.2** Fix "most recent" date misinterpretation + richer result display — LLM was setting `date_range_start=today, date_range_end=today` for "most recent" queries. Added Rule 11 to prompt ("do NOT set date ranges for latest/newest"), explicit null dates in few-shot examples, and `_strip_today_only_date_range()` deterministic guardrail. Also enriched fetch results with correspondent, document type, and tags (resolved from already-fetched metadata) and added two-line display format in CLI via `_format_doc_line()` helper.
+- [x] **S7.3** Complete ask/chat test coverage — added 7 tests covering all missing intent paths: TAG_DOCUMENTS, SHOW_DIGEST, FETCH_DOCUMENT (0 results), FETCH_DOCUMENT (multi-select), WATCH_FOLDER, chat fetch inline, dispatch error (RemoteProtocolError). Total `test_cli.py` tests: 48.
+- [x] **S7.4** Chat model recommendation — **Recommend `qwen2.5:14b-instruct`** for GENERAL_CHAT. Key findings: 14B (Q4_K_M, ~10-11 GB VRAM) offers meaningful conversation quality uplift over 7B for free-form chat while fitting easily in 24 GB. Keep `qwen2.5:7b-instruct` for all structured output tasks. Implementation: add `CHAT_MODEL` config variable, use in `_dispatch_chat()`. No code changes in this story.
+- [x] **S7.5** Paperless connection drop handling — added `_retry_on_disconnect()` in `paperless.py` (MAX_RETRIES=2, 1s delay) wrapping `_get`, `_patch`, `list_documents`, `upload_document`, `download_document`. Added try/except for `RemoteProtocolError` and `HTTPStatusError` in CLI. 4 new tests.

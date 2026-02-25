@@ -4,16 +4,32 @@
 
 ---
 
-## Epic 7: Search Reliability & Smoke Testing
 
-**Goal:** Fix query interpreter reliability issues discovered during Epic 6 smoke testing. The LLM sometimes returns high confidence but empty search fields, causing Paperless to return all documents unfiltered.
+## Epic 8: Web Search Intent *(Complete)*
 
-- [x] **S7.1** Improve query interpreter field extraction — added `_has_search_fields()` post-validation: when LLM returns high confidence but no search fields populated, inject original query as `text_search` fallback.
-- [x] **S7.2** Fix "most recent" date misinterpretation + richer result display — LLM was setting `date_range_start=today, date_range_end=today` for "most recent" queries. Added Rule 11 to prompt ("do NOT set date ranges for latest/newest"), explicit null dates in few-shot examples, and `_strip_today_only_date_range()` deterministic guardrail. Also enriched fetch results with correspondent, document type, and tags (resolved from already-fetched metadata) and added two-line display format in CLI via `_format_doc_line()` helper.
-- [ ] **S7.3** Full smoke test suite for `corvus ask` and `corvus chat` — test all intent paths against live Ollama + Paperless, document results.
-- [ ] **S7.4** Research and recommend a chat model for `corvus chat` — evaluate local models available via Ollama for general conversation quality (GENERAL_CHAT intent). Consider: response quality, VRAM fit (24 GB ceiling), personality/tone suitability for the Corvus persona, and whether a separate model from the instruct model (qwen2.5:7b-instruct) is warranted. Deliver a recommendation with rationale.
-- [ ] **S7.5** Add error handling for Paperless connection drops — `corvus fetch` crashes with raw traceback on `httpx.RemoteProtocolError` (server disconnect). Wrap Paperless API calls in retry/graceful-error paths.
+**Goal:** Add a WEB_SEARCH intent so `corvus ask`/`corvus chat` can answer questions requiring current/external knowledge by searching DuckDuckGo and summarizing results with source citations.
+
+- [x] **S8.1** Add `ddgs>=9.0` dependency (formerly `duckduckgo-search`, renamed upstream)
+- [x] **S8.2** Schema updates — `WEB_SEARCH` intent, `search_query` param, `WebSearchSource` + `WebSearchResult` models, union update
+- [x] **S8.3** Search integration module — `corvus/integrations/search.py` with async DDG wrapper, `SearchResult`, `SearchError`
+- [x] **S8.4** Config — `WEB_SEARCH_MAX_RESULTS` (default 5)
+- [x] **S8.5** Intent classifier prompt — web_search as intent #7 with examples, rules for when to classify as web_search vs general_chat
+- [x] **S8.6** Search pipeline — `run_search_pipeline()` (DDG search → LLM summarization with citations) + `_search_fallback_chat()` (LLM-only with disclaimer)
+- [x] **S8.7** Router dispatch — `_dispatch_search()` with search_query fallback to user_input
+- [x] **S8.8** CLI rendering — summary + numbered sources
+- [x] **S8.9** Tests — 14 new tests: 5 search integration, 4 pipeline, 2 router, 1 classifier, 2 CLI
 
 ---
 
-*Candidates for future work: Phase 3 (email pipeline), voice I/O (STT/TTS), mobile delivery, web dashboard, `corvus chat` conversation memory.*
+*Candidates for future work: Phase 3 (email pipeline), voice I/O (STT/TTS), mobile delivery, web dashboard, `corvus chat` conversation memory, implement `CHAT_MODEL` config for separate chat model, web search page content fetching (see below).*
+
+---
+
+## Future Enhancements
+
+### Web search: fetch page content for richer answers
+**Context:** The current web search pipeline only has access to search result snippets (page descriptions), not actual page content. For queries like weather, sports scores, or detailed factual lookups, snippets often lack the specific data needed (e.g. game times, current temperatures). The LLM summarizes correctly from what it has, but the input is inherently thin.
+
+**Proposed improvement:** After the initial search, fetch the HTML content of the top 1-2 result pages, extract readable text, truncate to fit the LLM context window, and include it alongside the snippets in the summarization prompt. This would give the LLM access to actual temperatures, game schedules, article text, etc.
+
+**Trade-offs:** Adds ~2-3s latency per page fetch, requires HTML-to-text extraction (e.g. `readability-lxml` or `trafilatura`), needs content truncation logic to avoid exceeding LLM context limits. Significantly improves answer quality for current-events and factual queries.
