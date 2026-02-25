@@ -153,3 +153,17 @@
 - [x] **S11.4** Integrate into search pipeline — fetch pages after DDG search, include in LLM context, updated system prompt
 - [x] **S11.5** Tests — 15 new tests across 3 test files (320 total pass)
 - [x] **S11.6** Smoke test — confirmed richer answers with actual data from page content
+
+---
+
+## Epic 12: Conversation Memory Persistence (V2)
+
+**Goal:** Persist `corvus chat` conversation history to SQLite so sessions can be resumed across restarts.
+
+- [x] **S12.1** SQLite schema — conversations table (id, title, created_at, updated_at), messages table (conversation_id, role, content, created_at), index on conversation_id
+- [x] **S12.2** Persistence layer — `ConversationStore` class wrapping SQLite (create, add_message, load_messages, get_most_recent, list_conversations, get_conversation with prefix matching)
+- [x] **S12.3** Config — `CONVERSATION_DB_PATH` in `corvus/config.py`
+- [x] **S12.4** Extend `ConversationHistory` — optional persistence (store + conversation_id), `from_store()` classmethod, `set_persistence()` for deferred creation, `conversation_id` property
+- [x] **S12.5** CLI wiring — `--new`, `--list`, `--resume <id>` on chat; default resumes most recent; deferred conversation creation on first message; `_list_conversations()` helper
+- [x] **S12.6** Tests — 26 store tests, 6 history persistence tests, 6 CLI tests (38 new, 358 total pass)
+- [x] **S12.7** Smoke test — `--list` (empty + populated), `--new` (creates on first msg, not on quit), default resume, `--resume <prefix>`, `--resume bad-id` error, web search in persisted session, message counts update correctly

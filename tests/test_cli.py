@@ -1095,10 +1095,11 @@ def test_ask_empty_query(runner, monkeypatch):
 # ------------------------------------------------------------------
 
 
-def test_chat_quit(runner, monkeypatch):
+def test_chat_quit(runner, monkeypatch, tmp_path):
     """Chat REPL exits on 'quit'."""
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     mock_ollama = _mock_ollama()
     mock_paperless = _mock_paperless()
@@ -1113,12 +1114,13 @@ def test_chat_quit(runner, monkeypatch):
     assert "Goodbye" in result.output
 
 
-def test_chat_processes_input(runner, monkeypatch):
+def test_chat_processes_input(runner, monkeypatch, tmp_path):
     """Chat REPL classifies and dispatches a query, then exits on quit."""
     from corvus.schemas.orchestrator import Intent
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     classification = _make_intent_classification("general_chat")
     mock_raw = MagicMock()
@@ -1154,10 +1156,11 @@ def test_chat_processes_input(runner, monkeypatch):
     assert "Goodbye" in result.output
 
 
-def test_chat_skips_empty_input(runner, monkeypatch):
+def test_chat_skips_empty_input(runner, monkeypatch, tmp_path):
     """Chat REPL skips empty input."""
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     mock_ollama = _mock_ollama()
     mock_paperless = _mock_paperless()
@@ -1172,10 +1175,11 @@ def test_chat_skips_empty_input(runner, monkeypatch):
     assert "Goodbye" in result.output
 
 
-def test_chat_handles_error(runner, monkeypatch):
+def test_chat_handles_error(runner, monkeypatch, tmp_path):
     """Chat REPL handles errors gracefully and continues."""
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     mock_ollama = _mock_ollama()
     mock_paperless = _mock_paperless()
@@ -1408,12 +1412,13 @@ def test_ask_watch_folder_intent(runner, monkeypatch):
     assert "corvus watch" in result.output
 
 
-def test_chat_fetch_select(runner, monkeypatch):
+def test_chat_fetch_select(runner, monkeypatch, tmp_path):
     """Chat mode shows fetch results with interactive selection."""
     from corvus.schemas.orchestrator import FetchPipelineResult, Intent
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     docs = [
         {"id": 10, "title": "Invoice Jan", "created": "2025-01-01T00:00:00Z",
@@ -1464,12 +1469,13 @@ def test_chat_fetch_select(runner, monkeypatch):
     assert "Goodbye" in result.output
 
 
-def test_chat_fetch_skip(runner, monkeypatch):
+def test_chat_fetch_skip(runner, monkeypatch, tmp_path):
     """Chat mode allows skipping fetch selection."""
     from corvus.schemas.orchestrator import FetchPipelineResult, Intent
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     docs = [
         {"id": 10, "title": "Invoice Jan", "created": "2025-01-01T00:00:00Z",
@@ -1513,12 +1519,13 @@ def test_chat_fetch_skip(runner, monkeypatch):
     assert "Goodbye" in result.output
 
 
-def test_chat_fetch_single_auto_opens(runner, monkeypatch):
+def test_chat_fetch_single_auto_opens(runner, monkeypatch, tmp_path):
     """Chat mode auto-opens single fetch result in browser."""
     from corvus.schemas.orchestrator import FetchPipelineResult, Intent
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     docs = [
         {"id": 73, "title": "AT&T Invoice", "created": "2025-01-01T00:00:00Z",
@@ -1610,12 +1617,13 @@ def test_ask_web_search_intent(runner, monkeypatch):
     assert "[2] NYC Forecast" in result.output
 
 
-def test_chat_web_search(runner, monkeypatch):
+def test_chat_web_search(runner, monkeypatch, tmp_path):
     """Chat mode handles web search results."""
     from corvus.schemas.orchestrator import Intent, WebSearchResult, WebSearchSource
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     classification = _make_intent_classification("web_search", search_query="latest python features")
     mock_raw = MagicMock()
@@ -1748,11 +1756,12 @@ def test_fetch_paperless_connection_error(runner, monkeypatch):
 # ------------------------------------------------------------------
 
 
-def test_chat_displays_chat_model(runner, monkeypatch):
+def test_chat_displays_chat_model(runner, monkeypatch, tmp_path):
     """Chat command shows CHAT_MODEL when configured."""
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
     monkeypatch.setattr("corvus.cli.CHAT_MODEL", "qwen2.5:14b-instruct")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     mock_ollama = _mock_ollama()
     mock_paperless = _mock_paperless()
@@ -1772,12 +1781,13 @@ def test_chat_displays_chat_model(runner, monkeypatch):
 # ------------------------------------------------------------------
 
 
-def test_chat_passes_history_to_dispatch(runner, monkeypatch):
+def test_chat_passes_history_to_dispatch(runner, monkeypatch, tmp_path):
     """Chat REPL passes conversation history to dispatch on second turn."""
     from corvus.schemas.orchestrator import Intent
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     classification = _make_intent_classification("general_chat")
     mock_raw = MagicMock()
@@ -1820,12 +1830,13 @@ def test_chat_passes_history_to_dispatch(runner, monkeypatch):
     assert history[0]["content"] == "hello"
 
 
-def test_chat_passes_context_to_classifier(runner, monkeypatch):
+def test_chat_passes_context_to_classifier(runner, monkeypatch, tmp_path):
     """Chat REPL passes conversation context to classifier on second turn."""
     from corvus.schemas.orchestrator import Intent
 
     monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
     monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
 
     classification = _make_intent_classification("general_chat")
     mock_raw = MagicMock()
@@ -1905,3 +1916,134 @@ def test_ask_no_conversation_history(runner, monkeypatch):
     call_kwargs = mock_dispatch.call_args.kwargs
     # ask does not pass conversation_history (not in kwargs or is None)
     assert call_kwargs.get("conversation_history") is None
+
+
+# ------------------------------------------------------------------
+# S12.4 — Conversation persistence CLI tests
+# ------------------------------------------------------------------
+
+
+def test_chat_list_empty(runner, monkeypatch, tmp_path):
+    """--list with empty store shows 'No conversations yet.'."""
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
+    result = runner.invoke(cli, ["chat", "--list"])
+    assert result.exit_code == 0
+    assert "No conversations yet" in result.output
+
+
+def test_chat_list_shows_conversations(runner, monkeypatch, tmp_path):
+    """--list displays conversations with metadata."""
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
+
+    from corvus.orchestrator.conversation_store import ConversationStore
+
+    with ConversationStore(tmp_path / "conv.db") as store:
+        conv_id = store.create("Find my AT&T invoice")
+        store.add_message(conv_id, "user", "Find my AT&T invoice")
+        store.add_message(conv_id, "assistant", "Found 1 document.")
+
+    result = runner.invoke(cli, ["chat", "--list"])
+    assert result.exit_code == 0
+    assert "Recent conversations" in result.output
+    assert "Find my AT&T invoice" in result.output
+    assert "2 msgs" in result.output
+    assert conv_id[:8] in result.output
+
+
+def test_chat_new_starts_fresh(runner, monkeypatch, tmp_path):
+    """--new starts a fresh conversation even when recent conversations exist."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
+
+    from corvus.orchestrator.conversation_store import ConversationStore
+
+    with ConversationStore(tmp_path / "conv.db") as store:
+        conv_id = store.create("Old conversation")
+        store.add_message(conv_id, "user", "Old conversation")
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+    ):
+        result = runner.invoke(cli, ["chat", "--new"], input="quit\n")
+
+    assert result.exit_code == 0
+    assert "Starting new conversation" in result.output
+
+
+def test_chat_default_resumes_most_recent(runner, monkeypatch, tmp_path):
+    """Default (no flags) resumes the most recent conversation."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
+
+    from corvus.orchestrator.conversation_store import ConversationStore
+
+    with ConversationStore(tmp_path / "conv.db") as store:
+        conv_id = store.create("My important conversation")
+        store.add_message(conv_id, "user", "My important conversation")
+        store.add_message(conv_id, "assistant", "Hello!")
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+    ):
+        result = runner.invoke(cli, ["chat"], input="quit\n")
+
+    assert result.exit_code == 0
+    assert "Resuming: My important conversation" in result.output
+
+
+def test_chat_resume_specific(runner, monkeypatch, tmp_path):
+    """--resume <id> loads a specific conversation."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
+
+    from corvus.orchestrator.conversation_store import ConversationStore
+
+    with ConversationStore(tmp_path / "conv.db") as store:
+        id1 = store.create("First conversation")
+        store.add_message(id1, "user", "First conversation")
+        id2 = store.create("Second conversation")
+        store.add_message(id2, "user", "Second conversation")
+
+    short_id = id1[:8]
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+    ):
+        result = runner.invoke(cli, ["chat", "--resume", short_id], input="quit\n")
+
+    assert result.exit_code == 0
+    assert "Resuming: First conversation" in result.output
+
+
+def test_chat_resume_bad_id(runner, monkeypatch, tmp_path):
+    """--resume with nonexistent ID shows error."""
+    monkeypatch.setattr("corvus.cli.PAPERLESS_BASE_URL", "http://localhost:8000")
+    monkeypatch.setattr("corvus.cli.PAPERLESS_API_TOKEN", "test-token")
+    monkeypatch.setattr("corvus.cli.CONVERSATION_DB_PATH", str(tmp_path / "conv.db"))
+
+    mock_ollama = _mock_ollama()
+    mock_paperless = _mock_paperless()
+
+    with (
+        _patch_async_context("corvus.integrations.ollama.OllamaClient", mock_ollama),
+        _patch_async_context("corvus.integrations.paperless.PaperlessClient", mock_paperless),
+    ):
+        result = runner.invoke(cli, ["chat", "--resume", "bad-id-123"])
+
+    assert result.exit_code == 0
+    assert "No conversation found" in result.output

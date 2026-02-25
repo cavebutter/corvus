@@ -21,6 +21,7 @@ import httpx
 from corvus.config import (
     AUDIT_LOG_PATH,
     CHAT_MODEL,
+    CONVERSATION_DB_PATH,
     OLLAMA_BASE_URL,
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
@@ -738,15 +739,51 @@ def _render_orchestrator_response(response) -> None:
 @cli.command()
 @click.option("--model", "-m", default=None, help="Ollama model name (auto-detected if omitted).")
 @click.option("--keep-alive", default="10m", show_default=True, help="Ollama keep_alive duration.")
-def chat(model: str | None, keep_alive: str) -> None:
+@click.option("--new", "start_new", is_flag=True, help="Start a fresh conversation.")
+@click.option("--list", "list_convs", is_flag=True, help="Show recent conversations and exit.")
+@click.option("--resume", "resume_id", default=None, help="Resume a specific conversation (accepts ID prefix).")
+def chat(
+    model: str | None,
+    keep_alive: str,
+    start_new: bool,
+    list_convs: bool,
+    resume_id: str | None,
+) -> None:
     """Interactive REPL with the Corvus orchestrator."""
+    if list_convs:
+        _list_conversations()
+        return
     _validate_config()
-    asyncio.run(_chat_async(model, keep_alive))
+    asyncio.run(_chat_async(model, keep_alive, start_new, resume_id))
 
 
-async def _chat_async(model: str | None, keep_alive: str) -> None:
+def _list_conversations() -> None:
+    """Display recent conversations and exit."""
+    from corvus.orchestrator.conversation_store import ConversationStore
+
+    with ConversationStore(CONVERSATION_DB_PATH) as store:
+        convs = store.list_conversations(limit=20)
+        if not convs:
+            click.echo("No conversations yet.")
+            return
+        click.echo("Recent conversations:\n")
+        for i, conv in enumerate(convs, 1):
+            short_id = conv["id"][:8]
+            updated = conv["updated_at"][:16].replace("T", " ")
+            count = conv["message_count"]
+            title = conv["title"]
+            click.echo(f"  {i:>2}. [{updated}] {title}  ({count} msgs, id={short_id})")
+
+
+async def _chat_async(
+    model: str | None,
+    keep_alive: str,
+    start_new: bool,
+    resume_id: str | None,
+) -> None:
     from corvus.integrations.ollama import OllamaClient
     from corvus.integrations.paperless import PaperlessClient
+    from corvus.orchestrator.conversation_store import ConversationStore
     from corvus.orchestrator.history import ConversationHistory, summarize_response
     from corvus.orchestrator.router import dispatch
     from corvus.planner.intent_classifier import classify_intent
@@ -754,104 +791,134 @@ async def _chat_async(model: str | None, keep_alive: str) -> None:
 
     chat_model_resolved = CHAT_MODEL if CHAT_MODEL else None
 
-    async with (
-        PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
-        OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
-    ):
-        model = await _resolve_model(ollama, model)
-        if chat_model_resolved:
-            click.echo(f"Chat model: {CHAT_MODEL}")
+    store = ConversationStore(CONVERSATION_DB_PATH)
+    try:
+        async with (
+            PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
+            OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
+        ):
+            model = await _resolve_model(ollama, model)
+            if chat_model_resolved:
+                click.echo(f"Chat model: {CHAT_MODEL}")
 
-        click.echo("Corvus interactive mode. Type 'quit' to leave.\n")
+            # Determine conversation mode: resume or new
+            history: ConversationHistory
+            if resume_id:
+                conv = store.get_conversation(resume_id)
+                if conv is None:
+                    click.echo(f"Error: No conversation found matching '{resume_id}'.", err=True)
+                    return
+                history = ConversationHistory.from_store(store, conv["id"])
+                click.echo(f"Resuming: {conv['title']}")
+            elif start_new:
+                history = ConversationHistory(max_turns=20, store=store)
+                click.echo("Starting new conversation.")
+            else:
+                # Default: resume most recent, or start new
+                recent_id = store.get_most_recent()
+                if recent_id:
+                    conv = store.get_conversation(recent_id)
+                    history = ConversationHistory.from_store(store, recent_id)
+                    click.echo(f"Resuming: {conv['title']}")
+                else:
+                    history = ConversationHistory(max_turns=20, store=store)
+                    click.echo("Starting new conversation.")
 
-        history = ConversationHistory(max_turns=20)
+            click.echo("Corvus interactive mode. Type 'quit' to leave.\n")
 
-        while True:
-            try:
-                user_input = click.prompt("You", prompt_suffix="> ")
-            except (EOFError, KeyboardInterrupt):
-                click.echo("\nGoodbye.")
-                break
+            while True:
+                try:
+                    user_input = click.prompt("You", prompt_suffix="> ")
+                except (EOFError, KeyboardInterrupt):
+                    click.echo("\nGoodbye.")
+                    break
 
-            if user_input.strip().lower() in ("quit", "exit", "q"):
-                click.echo("Goodbye.")
-                break
+                if user_input.strip().lower() in ("quit", "exit", "q"):
+                    click.echo("Goodbye.")
+                    break
 
-            if not user_input.strip():
-                continue
+                if not user_input.strip():
+                    continue
 
-            try:
-                conversation_context = history.get_recent_context(max_turns=5)
+                try:
+                    # Deferred creation: create conversation on first real message
+                    if history.conversation_id is None:
+                        conv_id = store.create(user_input)
+                        history.set_persistence(store, conv_id)
 
-                classification, _raw = await classify_intent(
-                    user_input, ollama=ollama, model=model, keep_alive=keep_alive,
-                    conversation_context=conversation_context or None,
-                )
-                click.echo(f"  Intent: {classification.intent.value} ({classification.confidence:.0%})")
+                    conversation_context = history.get_recent_context(max_turns=5)
 
-                response = await dispatch(
-                    classification,
-                    user_input=user_input,
-                    paperless=paperless,
-                    ollama=ollama,
-                    model=model,
-                    keep_alive=keep_alive,
-                    queue_db_path=QUEUE_DB_PATH,
-                    audit_log_path=AUDIT_LOG_PATH,
-                    on_progress=click.echo,
-                    chat_model=chat_model_resolved,
-                    conversation_history=history.get_messages(),
-                )
+                    classification, _raw = await classify_intent(
+                        user_input, ollama=ollama, model=model, keep_alive=keep_alive,
+                        conversation_context=conversation_context or None,
+                    )
+                    click.echo(f"  Intent: {classification.intent.value} ({classification.confidence:.0%})")
 
-                _render_orchestrator_response(response)
+                    response = await dispatch(
+                        classification,
+                        user_input=user_input,
+                        paperless=paperless,
+                        ollama=ollama,
+                        model=model,
+                        keep_alive=keep_alive,
+                        queue_db_path=QUEUE_DB_PATH,
+                        audit_log_path=AUDIT_LOG_PATH,
+                        on_progress=click.echo,
+                        chat_model=chat_model_resolved,
+                        conversation_history=history.get_messages(),
+                    )
 
-                # Handle fetch results with interactive selection
-                if (
-                    response.action == OrchestratorAction.DISPATCHED
-                    and isinstance(response.result, FetchPipelineResult)
-                    and response.result.documents
-                ):
-                    import webbrowser
+                    _render_orchestrator_response(response)
 
-                    docs = response.result.documents
-                    total = response.result.documents_found
+                    # Handle fetch results with interactive selection
+                    if (
+                        response.action == OrchestratorAction.DISPATCHED
+                        and isinstance(response.result, FetchPipelineResult)
+                        and response.result.documents
+                    ):
+                        import webbrowser
 
-                    if len(docs) == 1 and total == 1:
-                        doc = docs[0]
-                        click.echo(_format_doc_line(1, doc, width=1))
-                        url = paperless.get_document_url(doc["id"])
-                        click.echo(f"Opening: {url}")
-                        webbrowser.open(url)
-                    else:
-                        display_count = min(len(docs), 10)
-                        for i, doc in enumerate(docs[:display_count], 1):
-                            click.echo(_format_doc_line(i, doc, width=1))
-                        if total > display_count:
-                            click.echo(f"  ... and {total - display_count} more.")
+                        docs = response.result.documents
+                        total = response.result.documents_found
 
-                        raw_choice = click.prompt(
-                            "\nSelect",
-                            prompt_suffix=f" [1-{display_count}, s to skip]: ",
-                            default="s",
-                        )
-                        if raw_choice.strip().lower() != "s":
-                            try:
-                                idx = int(raw_choice) - 1
-                                if idx < 0 or idx >= display_count:
-                                    raise ValueError
-                                selected = docs[idx]
-                                url = paperless.get_document_url(selected["id"])
-                                click.echo(f"Opening: {url}")
-                                webbrowser.open(url)
-                            except (ValueError, IndexError):
-                                click.echo("Invalid selection.", err=True)
+                        if len(docs) == 1 and total == 1:
+                            doc = docs[0]
+                            click.echo(_format_doc_line(1, doc, width=1))
+                            url = paperless.get_document_url(doc["id"])
+                            click.echo(f"Opening: {url}")
+                            webbrowser.open(url)
+                        else:
+                            display_count = min(len(docs), 10)
+                            for i, doc in enumerate(docs[:display_count], 1):
+                                click.echo(_format_doc_line(i, doc, width=1))
+                            if total > display_count:
+                                click.echo(f"  ... and {total - display_count} more.")
 
-                # Update conversation history
-                history.add_user_message(user_input)
-                history.add_assistant_message(summarize_response(response))
+                            raw_choice = click.prompt(
+                                "\nSelect",
+                                prompt_suffix=f" [1-{display_count}, s to skip]: ",
+                                default="s",
+                            )
+                            if raw_choice.strip().lower() != "s":
+                                try:
+                                    idx = int(raw_choice) - 1
+                                    if idx < 0 or idx >= display_count:
+                                        raise ValueError
+                                    selected = docs[idx]
+                                    url = paperless.get_document_url(selected["id"])
+                                    click.echo(f"Opening: {url}")
+                                    webbrowser.open(url)
+                                except (ValueError, IndexError):
+                                    click.echo("Invalid selection.", err=True)
 
-            except Exception:
-                logger.exception("Error processing input")
-                click.echo("  Error processing your request. See log for details.")
+                    # Update conversation history
+                    history.add_user_message(user_input)
+                    history.add_assistant_message(summarize_response(response))
 
-            click.echo()
+                except Exception:
+                    logger.exception("Error processing input")
+                    click.echo("  Error processing your request. See log for details.")
+
+                click.echo()
+    finally:
+        store.close()

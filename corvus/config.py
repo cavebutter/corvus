@@ -32,6 +32,9 @@ PAPERLESS_API_TOKEN: str = _internal.get("PAPERLESS_API_TOKEN", "")
 OLLAMA_BASE_URL: str = _internal.get("OLLAMA_BASE_URL", "http://localhost:11434")
 QUEUE_DB_PATH: str = _internal.get("QUEUE_DB_PATH", str(PROJECT_ROOT / "data" / "queue.db"))
 AUDIT_LOG_PATH: str = _internal.get("AUDIT_LOG_PATH", str(PROJECT_ROOT / "data" / "audit.log"))
+CONVERSATION_DB_PATH: str = _internal.get(
+    "CONVERSATION_DB_PATH", str(PROJECT_ROOT / "data" / "conversations.db")
+)
 
 # --- Watchdog (scan folder → Paperless intake) ---
 WATCHDOG_SCAN_DIR: str = _internal.get("WATCHDOG_SCAN_DIR", "")

@@ -2,6 +2,7 @@
 
 import pytest
 
+from corvus.orchestrator.conversation_store import ConversationStore
 from corvus.orchestrator.history import ConversationHistory, summarize_response
 from corvus.schemas.orchestrator import (
     FetchPipelineResult,
@@ -163,3 +164,83 @@ class TestSummarizeResponse:
             message="Could you rephrase?",
         )
         assert summarize_response(resp) == "Could you rephrase?"
+
+
+# ------------------------------------------------------------------
+# Persistence integration
+# ------------------------------------------------------------------
+
+
+class TestPersistence:
+    def test_add_message_persists_to_store(self, tmp_path):
+        with ConversationStore(tmp_path / "test.db") as store:
+            conv_id = store.create("Hello")
+            h = ConversationHistory(store=store, conversation_id=conv_id)
+            h.add_user_message("Hello")
+            h.add_assistant_message("Hi there!")
+            msgs = store.load_messages(conv_id)
+            assert len(msgs) == 2
+            assert msgs[0] == {"role": "user", "content": "Hello"}
+            assert msgs[1] == {"role": "assistant", "content": "Hi there!"}
+
+    def test_add_message_without_store(self):
+        """Backward compat: no store means no persistence, no errors."""
+        h = ConversationHistory()
+        h.add_user_message("Hello")
+        h.add_assistant_message("Hi")
+        assert len(h.get_messages()) == 2
+
+    def test_from_store_loads_messages(self, tmp_path):
+        with ConversationStore(tmp_path / "test.db") as store:
+            conv_id = store.create("Test")
+            store.add_message(conv_id, "user", "hello")
+            store.add_message(conv_id, "assistant", "hi")
+            store.add_message(conv_id, "user", "how are you?")
+            store.add_message(conv_id, "assistant", "good!")
+
+            h = ConversationHistory.from_store(store, conv_id)
+            msgs = h.get_messages()
+            assert len(msgs) == 4
+            assert msgs[0]["content"] == "hello"
+            assert msgs[3]["content"] == "good!"
+
+    def test_from_store_trims_to_max_turns(self, tmp_path):
+        with ConversationStore(tmp_path / "test.db") as store:
+            conv_id = store.create("Test")
+            # Add 10 turns (20 messages)
+            for i in range(10):
+                store.add_message(conv_id, "user", f"msg {i}")
+                store.add_message(conv_id, "assistant", f"reply {i}")
+
+            h = ConversationHistory.from_store(store, conv_id, max_turns=3)
+            msgs = h.get_messages()
+            # max_turns=3 → 6 messages in memory
+            assert len(msgs) == 6
+            # Should be the last 3 turns
+            assert msgs[0]["content"] == "msg 7"
+            assert msgs[5]["content"] == "reply 9"
+            # DB still has all 20
+            assert len(store.load_messages(conv_id)) == 20
+
+    def test_set_persistence_enables_persistence(self, tmp_path):
+        with ConversationStore(tmp_path / "test.db") as store:
+            h = ConversationHistory()
+            # No persistence yet
+            h.add_user_message("before")
+            assert store.list_conversations() == []
+
+            conv_id = store.create("Test")
+            h.set_persistence(store, conv_id)
+            h.add_user_message("after")
+            msgs = store.load_messages(conv_id)
+            assert len(msgs) == 1
+            assert msgs[0]["content"] == "after"
+
+    def test_conversation_id_property(self, tmp_path):
+        h = ConversationHistory()
+        assert h.conversation_id is None
+
+        with ConversationStore(tmp_path / "test.db") as store:
+            conv_id = store.create("Test")
+            h.set_persistence(store, conv_id)
+            assert h.conversation_id == conv_id

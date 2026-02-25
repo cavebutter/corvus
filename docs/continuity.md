@@ -4,6 +4,82 @@
 
 ---
 
+## Session: 2026-02-25 (session 15)
+
+### What was done
+- Implemented **Epic 12: Conversation Memory Persistence (V2)** (S12.1–S12.6, all complete)
+
+#### Overview
+`corvus chat` conversation history was previously in-memory (`ConversationHistory`) and lost on exit. Users couldn't resume where they left off or review past conversations. This epic persists conversations to SQLite so sessions survive restarts, with CLI flags for managing sessions.
+
+#### Changes
+- **`corvus/config.py`**: Added `CONVERSATION_DB_PATH` (default: `data/conversations.db`)
+- **`corvus/orchestrator/conversation_store.py`** (new): SQLite-backed `ConversationStore` class — `conversations` table (id UUID, title, created_at, updated_at) + `messages` table (id autoincrement, conversation_id FK, role, content, created_at) + index on conversation_id. Methods: `create()` (UUID + auto-title from first message truncated to 60 chars), `add_message()`, `load_messages()`, `get_most_recent()`, `list_conversations()`, `get_conversation()` (accepts ID prefix via LIKE query). Context manager pattern, WAL journal mode.
+- **`corvus/orchestrator/history.py`**: Extended `ConversationHistory` with optional persistence. New params: `store`, `conversation_id`. New classmethod `from_store()` loads all messages from SQLite, trims to `max_turns * 2` in memory. New method `set_persistence()` for deferred creation pattern. New property `conversation_id`. Backward compatible — all 14 existing tests pass unchanged.
+- **`corvus/cli.py`**: New flags on `chat` command: `--new` (fresh conversation), `--list` (show recent conversations and exit), `--resume <id>` (resume specific conversation by ID prefix). Default behavior: resume most recent conversation; if none exist, start new. Deferred creation: conversation only created in DB on first user message (avoids empty conversations if user quits immediately). `_list_conversations()` runs before `_validate_config()` so it works even without Paperless configured. Store opened in `_chat_async()`, closed in `finally` block.
+
+### Test summary
+- **38 new tests** across 3 files:
+  - `tests/test_conversation_store.py` (new) — 26 tests: _generate_title (6), create (3), add_message (3), load_messages (2), get_most_recent (2), list_conversations (5), get_conversation (4), context manager (1)
+  - `tests/test_conversation_history.py` — 6 new: persistence to store, backward compat, from_store loads, from_store trims, set_persistence, conversation_id property
+  - `tests/test_cli.py` — 6 new: --list empty, --list with conversations, --new, default resumes, --resume specific, --resume bad id
+- All existing chat tests updated with `CONVERSATION_DB_PATH` monkeypatch to tmp_path for isolation
+- **All 358 tests passing** (352 fast + 6 slow/deselected)
+
+### Files changed
+| File | Change |
+|------|--------|
+| `corvus/config.py` | `CONVERSATION_DB_PATH` |
+| `corvus/orchestrator/conversation_store.py` | **New** — SQLite persistence layer |
+| `corvus/orchestrator/history.py` | Optional persistence (store, conversation_id, from_store, set_persistence) |
+| `corvus/cli.py` | `--new`, `--list`, `--resume` on chat; store lifecycle; deferred creation |
+| `tests/test_conversation_store.py` | **New** — 26 tests |
+| `tests/test_conversation_history.py` | 6 new tests |
+| `tests/test_cli.py` | 6 new tests + CONVERSATION_DB_PATH isolation in all chat tests |
+| `docs/backlog_current.md` | S12.1–S12.6 marked complete |
+| `docs/backlog_archive.md` | Epic 12 archived |
+
+### Current state
+- **Epics 1–12:** Complete (all archived)
+- **All tests passing:** 358 total
+- **Test breakdown:**
+  - `test_cli.py` — 62
+  - `test_conversation_store.py` — 26
+  - `test_conversation_history.py` — 20
+  - `test_intent_classifier.py` — 13 (1 slow)
+  - `test_pipeline_handlers.py` — 22
+  - `test_orchestrator_router.py` — 20
+  - `test_search_integration.py` — 17
+  - `test_ollama_client.py` — 4 (1 slow)
+  - `test_query_interpreter.py` — 27 (1 slow)
+  - `test_retrieval_router.py` — 39
+  - `test_paperless_client.py` — 6 (4 integration)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### Smoke test results (S12.7)
+- `corvus chat --list` (with prior data) — shows conversations with title, timestamp, message count, short ID
+- `corvus chat --new` + send message + quit — creates conversation with auto-title, 2 messages
+- `corvus chat --new` + quit immediately — **no empty conversation created** (deferred creation works)
+- `corvus chat` (no flags) — resumes most recent: "Resuming: Hello Corvus, how are you today?"
+- `corvus chat --resume f5c4` — prefix match resumes older conversation: "Resuming: hello"
+- `corvus chat --resume zzz-bad-id` — "Error: No conversation found matching 'zzz-bad-id'."
+- `corvus chat --new` + web search ("weather in New York") — creates new conversation, web search works, 2 msgs persisted
+- `corvus chat --list` — all 3 conversations shown, message counts correct, newest first
+
+### Next steps
+- Consider next: Phase 3 (email pipeline), voice I/O (STT/TTS), mobile delivery, web dashboard
+
+---
+
 ## Session: 2026-02-25 (session 14)
 
 ### What was done
