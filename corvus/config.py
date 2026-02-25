@@ -50,6 +50,9 @@ WATCHDOG_HASH_DB_PATH: str = _internal.get(
 
 # --- Web Search ---
 WEB_SEARCH_MAX_RESULTS: int = int(_internal.get("WEB_SEARCH_MAX_RESULTS", "5"))
+WEB_SEARCH_FETCH_PAGES: int = int(_internal.get("WEB_SEARCH_FETCH_PAGES", "2"))
+WEB_SEARCH_PAGE_MAX_CHARS: int = int(_internal.get("WEB_SEARCH_PAGE_MAX_CHARS", "8000"))
+WEB_SEARCH_FETCH_TIMEOUT: int = int(_internal.get("WEB_SEARCH_FETCH_TIMEOUT", "10"))
 
 # --- Chat ---
 CHAT_MODEL: str = _internal.get("CHAT_MODEL", "")

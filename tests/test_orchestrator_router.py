@@ -477,3 +477,38 @@ async def test_dispatch_web_search_no_query_uses_input(tmp_path):
     assert response.action == OrchestratorAction.DISPATCHED
     mock_pipeline.assert_called_once()
     assert mock_pipeline.call_args.kwargs["query"] == "latest news"
+
+
+# ------------------------------------------------------------------
+# WEB_SEARCH — page fetch config (S11.5)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_search_passes_fetch_config(tmp_path):
+    """_dispatch_search passes page fetch config values to the pipeline."""
+    classification = _make_classification(
+        Intent.WEB_SEARCH, search_query="weather",
+    )
+    mock_result = WebSearchResult(summary="Sunny.", sources=[], query="weather")
+
+    with (
+        patch(
+            "corvus.orchestrator.pipelines.run_search_pipeline",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ) as mock_pipeline,
+        patch("corvus.config.WEB_SEARCH_FETCH_PAGES", 3),
+        patch("corvus.config.WEB_SEARCH_PAGE_MAX_CHARS", 4000),
+        patch("corvus.config.WEB_SEARCH_FETCH_TIMEOUT", 15),
+    ):
+        await dispatch(
+            classification,
+            user_input="weather",
+            **_make_dispatch_kwargs(tmp_path),
+        )
+
+    call_kwargs = mock_pipeline.call_args.kwargs
+    assert call_kwargs["fetch_pages"] == 3
+    assert call_kwargs["page_max_chars"] == 4000
+    assert call_kwargs["fetch_timeout"] == 15

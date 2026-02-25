@@ -355,12 +355,15 @@ async def run_search_pipeline(
     query: str,
     keep_alive: str = "5m",
     max_results: int = 5,
+    fetch_pages: int = 2,
+    page_max_chars: int = 8000,
+    fetch_timeout: int = 10,
     on_progress: Callable[[str], None] | None = None,
 ) -> WebSearchResult:
     """Run the web search pipeline.
 
-    Searches DuckDuckGo, then uses an LLM to summarize the results
-    with source citations.
+    Searches DuckDuckGo, optionally fetches page content for richer context,
+    then uses an LLM to summarize the results with source citations.
 
     Args:
         ollama: An open OllamaClient instance.
@@ -368,12 +371,15 @@ async def run_search_pipeline(
         query: Search query string.
         keep_alive: Ollama keep_alive duration.
         max_results: Maximum number of search results.
+        fetch_pages: Number of top results to fetch page content for (0 to skip).
+        page_max_chars: Maximum characters of extracted text per page.
+        fetch_timeout: HTTP timeout in seconds for page fetches.
         on_progress: Optional callback for progress messages.
 
     Returns:
         WebSearchResult with summary, sources, and query.
     """
-    from corvus.integrations.search import SearchError, web_search
+    from corvus.integrations.search import SearchError, fetch_page_content, web_search
 
     def _emit(msg: str) -> None:
         if on_progress:
@@ -396,26 +402,43 @@ async def run_search_pipeline(
             ollama=ollama, model=model, query=query, keep_alive=keep_alive,
         )
 
+    # Step 1.5: Fetch page content for top results
+    if fetch_pages > 0:
+        _emit("Fetching page content...")
+        results = await fetch_page_content(
+            results,
+            max_pages=fetch_pages,
+            max_chars_per_page=page_max_chars,
+            timeout=fetch_timeout,
+        )
+        pages_fetched = sum(1 for r in results if r.page_content)
+        if pages_fetched:
+            _emit(f"Fetched content from {pages_fetched} page(s).")
+
     # Step 2: Build context for LLM summarization
     context_lines = []
     for i, r in enumerate(results, 1):
         context_lines.append(f"[{i}] {r.title}")
         context_lines.append(f"    URL: {r.url}")
         context_lines.append(f"    Snippet: {r.snippet}")
+        if r.page_content:
+            context_lines.append(f"    Page content:\n{r.page_content}")
     context = "\n".join(context_lines)
 
     _emit(f"Found {len(results)} result(s), summarizing...")
 
     system_prompt = (
         "You are Corvus, a helpful AI assistant. Your job is to answer the user's "
-        "question using ONLY the search result snippets provided below.\n\n"
+        "question using ONLY the search results provided below. Some results include "
+        "extracted page content in addition to snippets.\n\n"
         "Rules:\n"
-        "- Extract and state specific facts, numbers, and data from the snippets.\n"
+        "- Extract and state specific facts, numbers, and data from the results.\n"
+        "- Prefer data from page content over snippets when both are available.\n"
         "- Give a direct answer first, then add context if needed.\n"
         "- Cite sources by number in square brackets (e.g. [1], [2]).\n"
-        "- If the snippets don't contain enough data to fully answer, say what you "
+        "- If the results don't contain enough data to fully answer, say what you "
         "found and note what's missing — do NOT tell the user to visit the websites.\n"
-        "- Never invent data not present in the snippets.\n"
+        "- Never invent data not present in the results.\n"
         "- Be concise: 2-4 sentences max."
     )
     user_prompt = f"Question: {query}\n\nSearch results:\n{context}"

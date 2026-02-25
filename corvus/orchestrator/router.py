@@ -268,7 +268,12 @@ async def _dispatch_search(
     keep_alive: str,
     on_progress: Callable[[str], None] | None,
 ) -> OrchestratorResponse:
-    from corvus.config import WEB_SEARCH_MAX_RESULTS
+    from corvus.config import (
+        WEB_SEARCH_FETCH_PAGES,
+        WEB_SEARCH_FETCH_TIMEOUT,
+        WEB_SEARCH_MAX_RESULTS,
+        WEB_SEARCH_PAGE_MAX_CHARS,
+    )
     from corvus.orchestrator.pipelines import run_search_pipeline
 
     query = classification.search_query or user_input
@@ -279,6 +284,9 @@ async def _dispatch_search(
         query=query,
         keep_alive=keep_alive,
         max_results=WEB_SEARCH_MAX_RESULTS,
+        fetch_pages=WEB_SEARCH_FETCH_PAGES,
+        page_max_chars=WEB_SEARCH_PAGE_MAX_CHARS,
+        fetch_timeout=WEB_SEARCH_FETCH_TIMEOUT,
         on_progress=on_progress,
     )
 

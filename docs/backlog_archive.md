@@ -99,3 +99,57 @@
 - [x] **S7.3** Complete ask/chat test coverage — added 7 tests covering all missing intent paths: TAG_DOCUMENTS, SHOW_DIGEST, FETCH_DOCUMENT (0 results), FETCH_DOCUMENT (multi-select), WATCH_FOLDER, chat fetch inline, dispatch error (RemoteProtocolError). Total `test_cli.py` tests: 48.
 - [x] **S7.4** Chat model recommendation — **Recommend `qwen2.5:14b-instruct`** for GENERAL_CHAT. Key findings: 14B (Q4_K_M, ~10-11 GB VRAM) offers meaningful conversation quality uplift over 7B for free-form chat while fitting easily in 24 GB. Keep `qwen2.5:7b-instruct` for all structured output tasks. Implementation: add `CHAT_MODEL` config variable, use in `_dispatch_chat()`. No code changes in this story.
 - [x] **S7.5** Paperless connection drop handling — added `_retry_on_disconnect()` in `paperless.py` (MAX_RETRIES=2, 1s delay) wrapping `_get`, `_patch`, `list_documents`, `upload_document`, `download_document`. Added try/except for `RemoteProtocolError` and `HTTPStatusError` in CLI. 4 new tests.
+
+---
+
+## Epic 8: Web Search Intent
+
+**Goal:** Add a WEB_SEARCH intent so `corvus ask`/`corvus chat` can answer questions requiring current/external knowledge by searching DuckDuckGo and summarizing results with source citations.
+
+- [x] **S8.1** Add `ddgs>=9.0` dependency (formerly `duckduckgo-search`, renamed upstream)
+- [x] **S8.2** Schema updates — `WEB_SEARCH` intent, `search_query` param, `WebSearchSource` + `WebSearchResult` models, union update
+- [x] **S8.3** Search integration module — `corvus/integrations/search.py` with async DDG wrapper, `SearchResult`, `SearchError`
+- [x] **S8.4** Config — `WEB_SEARCH_MAX_RESULTS` (default 5)
+- [x] **S8.5** Intent classifier prompt — web_search as intent #7 with examples, rules for when to classify as web_search vs general_chat
+- [x] **S8.6** Search pipeline — `run_search_pipeline()` (DDG search → LLM summarization with citations) + `_search_fallback_chat()` (LLM-only with disclaimer)
+- [x] **S8.7** Router dispatch — `_dispatch_search()` with search_query fallback to user_input
+- [x] **S8.8** CLI rendering — summary + numbered sources
+- [x] **S8.9** Tests — 14 new tests: 5 search integration, 4 pipeline, 2 router, 1 classifier, 2 CLI
+
+---
+
+## Epic 9: CHAT_MODEL Config
+
+**Goal:** Allow `corvus chat` and web search summarization to use a separate (larger) model for free-form text generation while keeping the default model for structured output.
+
+- [x] **S9.1** Config variable — `CHAT_MODEL` in `corvus/config.py` (empty string = same model for everything)
+- [x] **S9.2** Thread `chat_model` through router — `dispatch()` gets `chat_model` param, computes `effective_chat_model`, passes to `_dispatch_chat()` and `_dispatch_search()`
+- [x] **S9.3** Thread `chat_model` through CLI — `_ask_async()` and `_chat_async()` resolve and pass `CHAT_MODEL`, echo when set
+- [x] **S9.4** Tests — 5 new: 4 router (chat/search use chat model, default fallback, tag ignores), 1 CLI (display)
+
+---
+
+## Epic 10: Conversation Memory
+
+**Goal:** Add in-memory conversation history to `corvus chat` so multi-turn references ("the first one", "download it") work. Lost on exit (V1).
+
+- [x] **S10.1** `ConversationHistory` helper — `corvus/orchestrator/history.py` with add/get messages, `get_recent_context()`, `summarize_response()` for all intent types
+- [x] **S10.2** Extend `ollama.chat()` — `messages` param inserted between system prompt and current user message
+- [x] **S10.3** Thread `conversation_history` through dispatch — `dispatch()` accepts and forwards to `_dispatch_chat()`
+- [x] **S10.4** Conversation context for intent classifier — `conversation_context` param, context-aware prompt template, rule 8 for reference resolution
+- [x] **S10.5** Wire into `_chat_async()` — `ConversationHistory` instance in REPL loop, context passed to classifier, history passed to dispatch, responses summarized for history
+- [x] **S10.6** Tests — 23 new: 14 conversation history, 2 ollama client, 2 intent classifier, 6 router, 4 CLI (history wiring + ask stateless)
+- [x] **S10.7** Interactive fetch in chat mode — single result auto-opens in browser, multiple results offer `[1-N, s to skip]` selection prompt (previously chat showed results inline with no delivery). 3 new tests (select, skip, single auto-open), replacing 1 old inline-only test.
+
+---
+
+## Epic 11: Web Search Page Content Fetching
+
+**Goal:** Improve web search answer quality by fetching actual page content from top search results, extracting readable text via trafilatura, and including it in the LLM summarization prompt alongside snippets.
+
+- [x] **S11.1** Add dependency — `trafilatura>=1.6` for HTML-to-text extraction
+- [x] **S11.2** Page fetcher — `_fetch_single_page()` + `fetch_page_content()` in `corvus/integrations/search.py`
+- [x] **S11.3** Config — `WEB_SEARCH_FETCH_PAGES` (2), `WEB_SEARCH_PAGE_MAX_CHARS` (8000), `WEB_SEARCH_FETCH_TIMEOUT` (10)
+- [x] **S11.4** Integrate into search pipeline — fetch pages after DDG search, include in LLM context, updated system prompt
+- [x] **S11.5** Tests — 15 new tests across 3 test files (320 total pass)
+- [x] **S11.6** Smoke test — confirmed richer answers with actual data from page content

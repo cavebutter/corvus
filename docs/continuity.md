@@ -4,6 +4,84 @@
 
 ---
 
+## Session: 2026-02-25 (session 14)
+
+### What was done
+- Implemented **Epic 11: Web Search Page Content Fetching** (6 stories, all complete)
+
+#### Overview
+The web search pipeline previously only had DDG snippets — short page descriptions, not actual page content. For factual queries (weather, scores, schedules), snippets often lacked the specific data needed. Now, after DDG search returns results, the top N pages are fetched, readable text is extracted via `trafilatura`, truncated to fit context, and included alongside snippets in the LLM summarization prompt. Gracefully degrades to snippet-only if fetches fail.
+
+#### Changes
+- **`pyproject.toml`**: Added `trafilatura>=1.6` dependency
+- **`corvus/config.py`**: 3 new config variables — `WEB_SEARCH_FETCH_PAGES` (2), `WEB_SEARCH_PAGE_MAX_CHARS` (8000), `WEB_SEARCH_FETCH_TIMEOUT` (10)
+- **`corvus/integrations/search.py`**: Added `page_content: str | None = None` field to `SearchResult`. New functions: `_truncate_on_word_boundary()`, `_fetch_single_page()` (GET with User-Agent, check 2xx + text/html, trafilatura.extract via to_thread, truncate, returns None on any failure), `fetch_page_content()` (creates httpx.AsyncClient, fetches top N concurrently via asyncio.gather, populates page_content on each result)
+- **`corvus/orchestrator/pipelines.py`**: `run_search_pipeline()` now accepts `fetch_pages`, `page_max_chars`, `fetch_timeout` params. After DDG search, fetches page content if `fetch_pages > 0`. Context builder includes `Page content:` section when available. System prompt updated: "search result snippets" → "search results", added "Prefer data from page content over snippets when both are available."
+- **`corvus/orchestrator/router.py`**: `_dispatch_search()` imports and passes the 3 new config values to `run_search_pipeline()`
+
+#### Graceful degradation
+- Individual page failure → `None`, other pages unaffected
+- All pages fail → context identical to snippet-only format
+- `fetch_pages=0` → skips fetching entirely (config-disabled)
+- Non-HTML responses → skipped (content-type check)
+- trafilatura returns None → treated as failure, skipped
+
+### Test summary
+- **17 new tests** across 3 files:
+  - `tests/test_search_integration.py` — 12 new: truncation (2), _fetch_single_page (extracts, truncates, timeout, HTTP error, non-HTML, extraction failure), fetch_page_content (top N only, partial failures, all failures, empty list)
+  - `tests/test_pipeline_handlers.py` — 4 new: page content in LLM context, snippet-only fallback on all failures, skips fetch when disabled, fetch progress messages
+  - `tests/test_orchestrator_router.py` — 1 new: _dispatch_search passes fetch config values
+- **All 320 tests passing** (314 fast + 6 slow/skipped)
+
+### Files changed
+| File | Change |
+|------|--------|
+| `pyproject.toml` | Added `trafilatura>=1.6` |
+| `corvus/config.py` | 3 new config variables |
+| `corvus/integrations/search.py` | `page_content` field, `_fetch_single_page()`, `fetch_page_content()` |
+| `corvus/orchestrator/pipelines.py` | Page fetching integration, updated system prompt |
+| `corvus/orchestrator/router.py` | Pass fetch config values in `_dispatch_search()` |
+| `tests/test_search_integration.py` | 12 new tests |
+| `tests/test_pipeline_handlers.py` | 4 new tests |
+| `tests/test_orchestrator_router.py` | 1 new test |
+| `docs/backlog_current.md` | Epic 11 moved to archive |
+| `docs/backlog_archive.md` | Epic 11 archived |
+
+### Current state
+- **Epics 1–11:** Complete (all archived)
+- **All tests passing:** 320 total
+- **Test breakdown:**
+  - `test_cli.py` — 56
+  - `test_conversation_history.py` — 14
+  - `test_intent_classifier.py` — 13 (1 slow)
+  - `test_pipeline_handlers.py` — 22
+  - `test_orchestrator_router.py` — 20
+  - `test_search_integration.py` — 17
+  - `test_ollama_client.py` — 4 (1 slow)
+  - `test_query_interpreter.py` — 27 (1 slow)
+  - `test_retrieval_router.py` — 39
+  - `test_paperless_client.py` — 6 (4 integration)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### Smoke test results
+- Factual queries (weather, etc.) now return richer answers with actual data from page content
+- `corvus ask "hello"` — general_chat still works, no regression
+- Snippet-only behavior preserved when all fetches fail or `WEB_SEARCH_FETCH_PAGES=0`
+
+### Next steps
+- Consider next: Epic 12 (conversation memory persistence V2), Phase 3 (email pipeline), voice I/O, web dashboard
+
+---
+
 ## Session: 2026-02-25 (session 13)
 
 ### What was done

@@ -559,6 +559,7 @@ async def test_search_pipeline_returns_summary():
             ollama=mock_ollama,
             model="test-model",
             query="weather in NYC",
+            fetch_pages=0,
         )
 
     assert isinstance(result, WebSearchResult)
@@ -587,6 +588,7 @@ async def test_search_pipeline_no_results_fallback():
             ollama=mock_ollama,
             model="test-model",
             query="weather in NYC",
+            fetch_pages=0,
         )
 
     assert isinstance(result, WebSearchResult)
@@ -613,6 +615,7 @@ async def test_search_pipeline_search_error_fallback():
             ollama=mock_ollama,
             model="test-model",
             query="weather in NYC",
+            fetch_pages=0,
         )
 
     assert isinstance(result, WebSearchResult)
@@ -643,8 +646,177 @@ async def test_search_pipeline_progress_messages():
             ollama=mock_ollama,
             model="test-model",
             query="test query",
+            fetch_pages=0,
             on_progress=progress.append,
         )
 
     assert any("Searching" in msg for msg in progress)
     assert any("summarizing" in msg for msg in progress)
+
+
+# ------------------------------------------------------------------
+# run_search_pipeline — page content fetching (S11.4)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_includes_page_content_in_context():
+    """Search pipeline includes page content in LLM context when available."""
+    from corvus.integrations.search import SearchResult
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_search_results = [
+        SearchResult(
+            title="Weather NYC",
+            url="https://weather.com/nyc",
+            snippet="Sunny 72F",
+        ),
+    ]
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("It's 72F and sunny in NYC.", MagicMock())
+
+    async def mock_fetch(results, **kwargs):
+        results[0].page_content = "Current temperature in NYC: 72F. Sunny skies."
+        return results
+
+    with (
+        patch(
+            "corvus.integrations.search.web_search",
+            new_callable=AsyncMock,
+            return_value=mock_search_results,
+        ),
+        patch(
+            "corvus.integrations.search.fetch_page_content",
+            side_effect=mock_fetch,
+        ),
+    ):
+        result = await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="weather in NYC",
+            fetch_pages=2,
+        )
+
+    assert isinstance(result, WebSearchResult)
+    # Verify the LLM received page content in the prompt
+    call_kwargs = mock_ollama.chat.call_args.kwargs
+    assert "Page content:" in call_kwargs["prompt"]
+    assert "72F" in call_kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_snippet_only_when_all_fetches_fail():
+    """Search pipeline falls back to snippet-only when all page fetches fail."""
+    from corvus.integrations.search import SearchResult
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_search_results = [
+        SearchResult(title="Result", url="https://example.com", snippet="Snippet text"),
+    ]
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("Summary from snippets.", MagicMock())
+
+    async def mock_fetch(results, **kwargs):
+        # All fetches fail — page_content stays None
+        return results
+
+    with (
+        patch(
+            "corvus.integrations.search.web_search",
+            new_callable=AsyncMock,
+            return_value=mock_search_results,
+        ),
+        patch(
+            "corvus.integrations.search.fetch_page_content",
+            side_effect=mock_fetch,
+        ),
+    ):
+        result = await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="test query",
+            fetch_pages=2,
+        )
+
+    assert isinstance(result, WebSearchResult)
+    call_kwargs = mock_ollama.chat.call_args.kwargs
+    assert "Page content:" not in call_kwargs["prompt"]
+    assert "Snippet text" in call_kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_skips_fetch_when_disabled():
+    """Search pipeline skips page fetching when fetch_pages=0."""
+    from corvus.integrations.search import SearchResult
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_search_results = [
+        SearchResult(title="Result", url="https://example.com", snippet="Snippet"),
+    ]
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("Summary.", MagicMock())
+
+    with (
+        patch(
+            "corvus.integrations.search.web_search",
+            new_callable=AsyncMock,
+            return_value=mock_search_results,
+        ),
+        patch(
+            "corvus.integrations.search.fetch_page_content",
+            new_callable=AsyncMock,
+        ) as mock_fetch,
+    ):
+        await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="test query",
+            fetch_pages=0,
+        )
+
+    mock_fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_fetch_progress_messages():
+    """Search pipeline emits 'Fetching page content' progress message."""
+    from corvus.integrations.search import SearchResult
+    from corvus.orchestrator.pipelines import run_search_pipeline
+
+    mock_search_results = [
+        SearchResult(title="Result", url="https://example.com", snippet="Snippet"),
+    ]
+
+    mock_ollama = _mock_ollama()
+    mock_ollama.chat.return_value = ("Summary.", MagicMock())
+
+    async def mock_fetch(results, **kwargs):
+        results[0].page_content = "Extracted content."
+        return results
+
+    progress = []
+
+    with (
+        patch(
+            "corvus.integrations.search.web_search",
+            new_callable=AsyncMock,
+            return_value=mock_search_results,
+        ),
+        patch(
+            "corvus.integrations.search.fetch_page_content",
+            side_effect=mock_fetch,
+        ),
+    ):
+        await run_search_pipeline(
+            ollama=mock_ollama,
+            model="test-model",
+            query="test query",
+            fetch_pages=2,
+            on_progress=progress.append,
+        )
+
+    assert any("Fetching page content" in msg for msg in progress)
+    assert any("Fetched content from 1 page(s)" in msg for msg in progress)
