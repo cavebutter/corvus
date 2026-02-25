@@ -292,7 +292,60 @@ async def test_fetch_pipeline_finds_documents():
     assert len(result.documents) == 1
     assert result.documents[0]["id"] == 73
     assert result.documents[0]["title"] == "AT&T Invoice"
+    assert result.documents[0]["correspondent"] is None
+    assert result.documents[0]["document_type"] is None
+    assert result.documents[0]["tags"] == []
     assert result.interpretation_confidence == 0.9
+
+
+@pytest.mark.asyncio
+async def test_fetch_pipeline_resolves_metadata_names():
+    """Fetch pipeline resolves correspondent/type/tag IDs to names."""
+    from corvus.orchestrator.pipelines import run_fetch_pipeline
+
+    doc = PaperlessDocument(
+        id=73,
+        title="AT&T Invoice",
+        content="Invoice content",
+        tags=[1],
+        correspondent=3,
+        document_type=4,
+        created="2025-01-01T00:00:00Z",
+        added="2025-01-01T00:00:00Z",
+        original_filename="invoice.pdf",
+    )
+    interp = QueryInterpretation(
+        confidence=0.9,
+        reasoning="Looking for AT&T invoice",
+        correspondent_name="AT&T",
+        sort_order="newest",
+    )
+    params = ResolvedSearchParams(correspondent_id=10)
+    mock_raw = MagicMock()
+
+    with (
+        patch(
+            "corvus.executors.query_interpreter.interpret_query",
+            new_callable=AsyncMock,
+            return_value=(interp, mock_raw),
+        ),
+        patch(
+            "corvus.router.retrieval.resolve_and_search",
+            new_callable=AsyncMock,
+            return_value=(params, [doc], 1),
+        ),
+    ):
+        result = await run_fetch_pipeline(
+            paperless=_mock_paperless(),
+            ollama=_mock_ollama(),
+            model="test-model",
+            query="find AT&T invoice",
+        )
+
+    d = result.documents[0]
+    assert d["correspondent"] == "Acme Corp"
+    assert d["document_type"] == "Invoice"
+    assert d["tags"] == ["invoice"]
 
 
 @pytest.mark.asyncio

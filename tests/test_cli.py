@@ -888,7 +888,10 @@ def test_ask_fetch_intent(runner, monkeypatch):
 
     doc_result = FetchPipelineResult(
         documents_found=1,
-        documents=[{"id": 73, "title": "AT&T Invoice", "created": "2025-01-01T00:00:00Z"}],
+        documents=[{
+            "id": 73, "title": "AT&T Invoice", "created": "2025-01-01T00:00:00Z",
+            "correspondent": "AT&T", "document_type": "Invoice", "tags": ["invoice"],
+        }],
     )
     response = _make_orchestrator_response(
         "dispatched", intent=Intent.FETCH_DOCUMENT, result=doc_result,

@@ -259,9 +259,20 @@ async def run_fetch_pipeline(
     if params.used_fallback:
         _emit("  Note: Structured filters returned no results; showing results from relaxed search.")
 
-    # Build simplified document dicts for the result
+    # Build lookup dicts from already-fetched metadata
+    tag_map = {t.id: t.name for t in tags}
+    corr_map = {c.id: c.name for c in correspondents}
+    dtype_map = {d.id: d.name for d in doc_types}
+
     doc_dicts = [
-        {"id": d.id, "title": d.title, "created": d.created}
+        {
+            "id": d.id,
+            "title": d.title,
+            "created": d.created,
+            "correspondent": corr_map.get(d.correspondent) if d.correspondent else None,
+            "document_type": dtype_map.get(d.document_type) if d.document_type else None,
+            "tags": [tag_map.get(tid, f"#{tid}") for tid in d.tags] if d.tags else [],
+        }
         for d in docs
     ]
 

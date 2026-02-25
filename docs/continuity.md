@@ -4,6 +4,70 @@
 
 ---
 
+## Session: 2026-02-25 (session 10)
+
+### What was done
+- Completed **S7.2**: Fix "most recent" date misinterpretation + richer result display
+
+#### Fix A — "most recent" date filter (`corvus/executors/query_interpreter.py`)
+- **A1**: Added Rule 11 to system prompt — "most recent"/"latest"/"newest" means `sort_order: "newest"`, do NOT set date ranges
+- **A2**: Updated few-shot example for "latest mortgage statement" with explicit `date_range_start: null, date_range_end: null`
+- **A3**: Added `_strip_today_only_date_range()` deterministic guardrail — strips date range when both start and end equal today (called after `_has_search_fields` check)
+
+#### Fix B — Richer result display
+- **B1** (`corvus/orchestrator/pipelines.py`): Build ID→name lookup dicts from already-fetched tags/correspondents/doc_types; doc_dicts now include `correspondent`, `document_type`, `tags` (resolved names, no new API calls)
+- **B2** (`corvus/cli.py`): Added `_format_doc_line()` helper producing two-line output per result (line 1: index/date/title/id; line 2: correspondent | doc type | tags). Updated all 4 display sites (fetch single, fetch multi, ask interactive, chat mode)
+- **B3** (`corvus/schemas/orchestrator.py`): Updated `documents` field description
+
+### Test summary
+- **6 new tests**: 5 in `test_query_interpreter.py` (date-stripping: today-only stripped, explicit preserved, no-range noop, partial preserved; prompt rule assertion), 1 in `test_pipeline_handlers.py` (`test_fetch_pipeline_resolves_metadata_names` with populated correspondent/type/tags)
+- Updated `test_pipeline_handlers.py` existing fetch test to assert new doc_dict keys
+- Updated `test_cli.py` `test_ask_fetch_intent` doc_dict to include new keys
+- **All 254 tests passing** (75 in affected files + 179 remaining)
+
+### Files changed
+| File | Change |
+|------|--------|
+| `corvus/executors/query_interpreter.py` | Rule 11 in prompt; explicit null dates in few-shot; `_strip_today_only_date_range()` post-validation |
+| `corvus/orchestrator/pipelines.py` | ID→name lookups; enriched doc_dicts with correspondent/type/tags |
+| `corvus/cli.py` | `_format_doc_line()` helper; 4 display sites updated |
+| `corvus/schemas/orchestrator.py` | Updated `documents` field description |
+| `tests/test_query_interpreter.py` | 5 new tests (date-stripping + prompt rule) |
+| `tests/test_pipeline_handlers.py` | 1 new test + updated assertions |
+| `tests/test_cli.py` | Updated doc_dict in ask test |
+
+### Current state
+- **Epics 1–6:** Complete (archived)
+- **Epic 7:** S7.1 ✓, S7.2 ✓, S7.3–S7.5 pending
+- **All tests passing:** 254 total
+- **Test breakdown:**
+  - `test_cli.py` — 39
+  - `test_intent_classifier.py` — 11 (1 slow)
+  - `test_pipeline_handlers.py` — 14
+  - `test_orchestrator_router.py` — 11
+  - `test_query_interpreter.py` — 27 (1 slow)
+  - `test_retrieval_router.py` — 39
+  - `test_paperless_client.py` — 4
+  - `test_ollama_client.py` — 2 (1 slow)
+  - `test_document_tagger.py` — 9 (1 slow)
+  - `test_tagging_router.py` — 15 (1 slow)
+  - `test_review_queue.py` — 19
+  - `test_audit_log.py` — 14
+  - `test_daily_digest.py` — 11
+  - `test_e2e_tagging_pipeline.py` — 1 (slow)
+  - `test_hash_store.py` — 10
+  - `test_watchdog_transfer.py` — 14
+  - `test_watchdog_audit.py` — 10
+  - `test_watchdog_cli.py` — 7
+
+### Next steps
+- **S7.3**: Full smoke test `corvus ask find the most recent mortgage statement` to verify date fix + richer display
+- **S7.4**: Chat model research
+- **S7.5**: Paperless connection drop handling
+- After Epic 7: Phase 3 (email pipeline), voice I/O, web dashboard
+
+---
+
 ## Session: 2026-02-24 (session 9)
 
 ### What was done

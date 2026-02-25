@@ -60,8 +60,24 @@ def cli(verbose: bool) -> None:
 
 
 # ------------------------------------------------------------------
-# Shared helpers for model resolution
+# Shared helpers
 # ------------------------------------------------------------------
+
+
+def _format_doc_line(i: int, doc: dict, width: int = 2) -> str:
+    """Format a document result as two display lines.
+
+    Line 1: index, date, title, id
+    Line 2: correspondent | document_type | tags (indented)
+    """
+    line1 = f"  {i:>{width}}. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})"
+    parts = []
+    parts.append(doc.get("correspondent") or "\u2014")
+    parts.append(doc.get("document_type") or "\u2014")
+    if doc.get("tags"):
+        parts.append(", ".join(doc["tags"]))
+    line2 = f"  {' ' * width}  {' | '.join(parts)}"
+    return f"{line1}\n{line2}"
 
 
 async def _resolve_model(ollama, model: str | None) -> str:
@@ -487,12 +503,12 @@ async def _fetch_async(
 
         if len(docs) == 1 and result.documents_found == 1:
             doc = docs[0]
-            click.echo(f"  1. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
+            click.echo(_format_doc_line(1, doc))
             selected = doc
         else:
             display_count = min(len(docs), 10)
             for i, doc in enumerate(docs[:display_count], 1):
-                click.echo(f"  {i:>2}. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
+                click.echo(_format_doc_line(i, doc))
 
             if result.documents_found > display_count:
                 click.echo(f"  ... and {result.documents_found - display_count} more. Consider refining your query.")
@@ -604,7 +620,7 @@ async def _ask_async(query: str, model: str | None, keep_alive: str) -> None:
                 elif docs:
                     display_count = min(len(docs), 10)
                     for i, doc in enumerate(docs[:display_count], 1):
-                        click.echo(f"  {i:>2}. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
+                        click.echo(_format_doc_line(i, doc))
                     if total > display_count:
                         click.echo(f"  ... and {total - display_count} more.")
 
@@ -744,7 +760,7 @@ async def _chat_async(model: str | None, keep_alive: str) -> None:
                     docs = response.result.documents
                     display_count = min(len(docs), 5)
                     for i, doc in enumerate(docs[:display_count], 1):
-                        click.echo(f"  {i}. [{doc['created'][:10]}] {doc['title']}  (id={doc['id']})")
+                        click.echo(_format_doc_line(i, doc, width=1))
                     if response.result.documents_found > display_count:
                         click.echo(f"  ... and {response.result.documents_found - display_count} more.")
 

@@ -17,6 +17,31 @@ from corvus.schemas.paperless import (
 
 logger = logging.getLogger(__name__)
 
+
+def _has_search_fields(interp: QueryInterpretation) -> bool:
+    """Check if the interpretation has any usable search fields."""
+    return bool(
+        interp.text_search
+        or interp.correspondent_name
+        or interp.document_type_name
+        or interp.tag_names
+    )
+
+
+def _strip_today_only_date_range(interp: QueryInterpretation) -> None:
+    """Strip date range when both start and end equal today.
+
+    This is almost certainly a misinterpretation of "latest"/"most recent"
+    — the LLM set today's date instead of leaving dates null.
+    """
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    if interp.date_range_start == today and interp.date_range_end == today:
+        logger.warning(
+            "Stripping today-only date range (likely 'most recent' misinterpretation)"
+        )
+        interp.date_range_start = None
+        interp.date_range_end = None
+
 SYSTEM_PROMPT = """\
 You are a document search assistant for a personal document management system.
 
@@ -38,6 +63,9 @@ search and should capture the core intent of the query.
 8. Default sort_order to "newest" unless the query implies otherwise.
 9. Assign a confidence score (0.0-1.0). Use lower scores when the query is vague.
 10. Provide brief reasoning explaining your interpretation.
+11. "most recent", "latest", or "newest" means sort_order: "newest" — do NOT set \
+date ranges for these terms. Only set date ranges when the query mentions a specific \
+date or time period (e.g. "from last month", "in 2022", "since January").
 
 ## Available Correspondents
 {correspondents}
@@ -47,6 +75,19 @@ search and should capture the core intent of the query.
 
 ## Available Tags
 {tags}
+
+## Examples
+
+Query: "latest mortgage statement"
+→ text_search: "mortgage statement", document_type_name: "Statement", \
+sort_order: "newest", date_range_start: null, date_range_end: null
+
+Query: "AT&T invoice from last month"
+→ text_search: "AT&T invoice", correspondent_name: "AT&T", document_type_name: "Invoice"
+
+Query: "tax documents for 2022"
+→ text_search: "tax 2022", tag_names: ["tax-return"], date_range_start: "2022-01-01", \
+date_range_end: "2022-12-31"
 """
 
 USER_PROMPT = """\
@@ -109,6 +150,16 @@ async def interpret_query(
         prompt=prompt,
         keep_alive=keep_alive,
     )
+
+    if not _has_search_fields(interpretation):
+        logger.warning(
+            "LLM returned empty search fields (confidence=%.2f); "
+            "injecting original query as text_search fallback",
+            interpretation.confidence,
+        )
+        interpretation.text_search = query
+
+    _strip_today_only_date_range(interpretation)
 
     logger.info(
         "Query interpreted: correspondent=%s type=%s tags=%s text=%s confidence=%.2f",

@@ -81,7 +81,7 @@ class FetchPipelineResult(BaseModel):
     documents_found: int
     documents: list[dict] = Field(
         default_factory=list,
-        description="Simplified document dicts (id, title, created)",
+        description="Document dicts (id, title, created, correspondent, document_type, tags)",
     )
     warnings: list[str] = Field(default_factory=list)
     used_fallback: bool = False
