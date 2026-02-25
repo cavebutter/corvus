@@ -202,4 +202,4 @@ Current posture: **all actions queued for review** (`--force-queue` default). Th
 
 ## License
 
-Private / personal use.
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) -- free for personal use, research, education, and hobby projects. Commercial use is prohibited. See [LICENSE](LICENSE) for the full terms.
