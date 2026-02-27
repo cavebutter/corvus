@@ -9,6 +9,7 @@ Commands:
     corvus fetch    — retrieve a document via natural language
     corvus ask      — single natural language query to the orchestrator
     corvus chat     — interactive REPL with the orchestrator
+    corvus voice    — voice assistant (wake word, STT, TTS)
 """
 
 import asyncio
@@ -26,6 +27,17 @@ from corvus.config import (
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
     QUEUE_DB_PATH,
+    VOICE_MAX_LISTEN_DURATION,
+    VOICE_SILENCE_DURATION,
+    VOICE_STT_BEAM_SIZE,
+    VOICE_STT_COMPUTE_TYPE,
+    VOICE_STT_DEVICE,
+    VOICE_STT_MODEL,
+    VOICE_TTS_LANG_CODE,
+    VOICE_TTS_SPEED,
+    VOICE_TTS_VOICE,
+    VOICE_WAKEWORD_MODEL_PATH,
+    VOICE_WAKEWORD_THRESHOLD,
     WATCHDOG_AUDIT_LOG_PATH,
     WATCHDOG_CONSUME_DIR,
     WATCHDOG_FILE_PATTERNS,
@@ -920,5 +932,174 @@ async def _chat_async(
                     click.echo("  Error processing your request. See log for details.")
 
                 click.echo()
+    finally:
+        store.close()
+
+
+# ------------------------------------------------------------------
+# corvus voice
+# ------------------------------------------------------------------
+
+
+def _check_voice_deps() -> None:
+    """Check that voice optional dependencies are installed."""
+    missing = []
+    for module, package in [
+        ("faster_whisper", "faster-whisper"),
+        ("kokoro", "kokoro"),
+        ("sounddevice", "sounddevice"),
+        ("numpy", "numpy"),
+    ]:
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(package)
+    if missing:
+        click.echo(
+            f"Error: Missing voice dependencies: {', '.join(missing)}\n"
+            f"Install them with: pip install corvus[voice]",
+            err=True,
+        )
+        sys.exit(1)
+
+
+def _list_voices() -> None:
+    """List available Kokoro TTS voices."""
+    try:
+        from huggingface_hub import list_repo_tree
+
+        files = list(list_repo_tree("hexgrad/Kokoro-82M", path_in_repo="voices"))
+        voices = sorted(
+            f.rfilename.replace("voices/", "").replace(".pt", "")
+            for f in files
+            if f.rfilename.endswith(".pt")
+        )
+        prefixes = {
+            "af": "American Female",
+            "am": "American Male",
+            "bf": "British Female",
+            "bm": "British Male",
+        }
+        groups: dict[str, list[str]] = {}
+        for v in voices:
+            groups.setdefault(v[:2], []).append(v)
+        click.echo(f"Available Kokoro voices ({len(voices)} total):\n")
+        for prefix, items in sorted(groups.items()):
+            label = prefixes.get(prefix, prefix)
+            click.echo(f"  {label}:")
+            for v in items:
+                click.echo(f"    {v}")
+        click.echo(f"\nUsage: corvus voice --voice bf_emma")
+    except Exception as exc:
+        click.echo(f"Error listing voices: {exc}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--model", "-m", default=None, help="Ollama model name (auto-detected if omitted).")
+@click.option("--keep-alive", default="30m", show_default=True, help="Ollama keep_alive duration.")
+@click.option("--new", "start_new", is_flag=True, help="Start a fresh conversation.")
+@click.option("--resume", "resume_id", default=None, help="Resume a specific conversation (accepts ID prefix).")
+@click.option("--voice", "voice_name", default=None, help="Kokoro voice name (e.g. af_heart, bf_emma).")
+@click.option("--no-wakeword", is_flag=True, help="Skip wake word detection, press Enter to trigger listening.")
+@click.option("--list-voices", is_flag=True, help="List available TTS voices and exit.")
+def voice(
+    model: str | None,
+    keep_alive: str,
+    start_new: bool,
+    resume_id: str | None,
+    voice_name: str | None,
+    no_wakeword: bool,
+    list_voices: bool,
+) -> None:
+    """Voice assistant — wake word, speech-to-text, text-to-speech."""
+    if list_voices:
+        _list_voices()
+        return
+    _check_voice_deps()
+    _validate_config()
+    asyncio.run(_voice_async(model, keep_alive, start_new, resume_id, voice_name, no_wakeword))
+
+
+async def _voice_async(
+    model: str | None,
+    keep_alive: str,
+    start_new: bool,
+    resume_id: str | None,
+    voice_name: str | None,
+    no_wakeword: bool,
+) -> None:
+    from corvus.integrations.ollama import OllamaClient
+    from corvus.integrations.paperless import PaperlessClient
+    from corvus.orchestrator.conversation_store import ConversationStore
+    from corvus.voice.pipeline import VoicePipeline
+
+    chat_model_resolved = CHAT_MODEL if CHAT_MODEL else None
+    tts_voice = voice_name or VOICE_TTS_VOICE
+
+    store = ConversationStore(CONVERSATION_DB_PATH)
+    try:
+        async with (
+            PaperlessClient(PAPERLESS_BASE_URL, PAPERLESS_API_TOKEN) as paperless,
+            OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama,
+        ):
+            resolved_model = await _resolve_model(ollama, model)
+            if chat_model_resolved:
+                click.echo(f"Chat model: {CHAT_MODEL}")
+
+            # Determine conversation mode
+            conversation_id: str | None = None
+            if resume_id:
+                conv = store.get_conversation(resume_id)
+                if conv is None:
+                    click.echo(f"Error: No conversation found matching '{resume_id}'.", err=True)
+                    return
+                conversation_id = conv["id"]
+                click.echo(f"Resuming: {conv['title']}")
+            elif start_new:
+                click.echo("Starting new conversation.")
+            else:
+                recent_id = store.get_most_recent()
+                if recent_id:
+                    conv = store.get_conversation(recent_id)
+                    conversation_id = recent_id
+                    click.echo(f"Resuming: {conv['title']}")
+                else:
+                    click.echo("Starting new conversation.")
+
+            click.echo("Loading voice models...")
+
+            pipeline = VoicePipeline(
+                ollama=ollama,
+                paperless=paperless,
+                model=resolved_model,
+                keep_alive=keep_alive,
+                chat_model=chat_model_resolved,
+                queue_db_path=QUEUE_DB_PATH,
+                audit_log_path=AUDIT_LOG_PATH,
+                stt_model=VOICE_STT_MODEL,
+                stt_device=VOICE_STT_DEVICE,
+                stt_compute_type=VOICE_STT_COMPUTE_TYPE,
+                stt_beam_size=VOICE_STT_BEAM_SIZE,
+                tts_lang_code=VOICE_TTS_LANG_CODE,
+                tts_voice=tts_voice,
+                tts_speed=VOICE_TTS_SPEED,
+                wakeword_model_path=VOICE_WAKEWORD_MODEL_PATH,
+                wakeword_threshold=VOICE_WAKEWORD_THRESHOLD,
+                silence_duration=VOICE_SILENCE_DURATION,
+                max_listen_duration=VOICE_MAX_LISTEN_DURATION,
+                store=store,
+                conversation_id=conversation_id,
+            )
+
+            if no_wakeword:
+                click.echo("Voice ready. Press Enter to speak, Ctrl+C to exit.")
+            else:
+                click.echo("Voice ready. Say the wake word to begin, Ctrl+C to exit.")
+
+            try:
+                await pipeline.run(no_wakeword=no_wakeword)
+            except KeyboardInterrupt:
+                click.echo("\nGoodbye.")
     finally:
         store.close()

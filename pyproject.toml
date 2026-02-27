@@ -26,6 +26,14 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.9",
 ]
+voice = [
+    "faster-whisper>=1.0",
+    "kokoro>=0.9",
+    "sounddevice>=0.5",
+    "soundfile>=0.12",
+    "openwakeword>=0.6",
+    "numpy>=1.26",
+]
 
 [tool.setuptools.packages.find]
 include = ["corvus*"]

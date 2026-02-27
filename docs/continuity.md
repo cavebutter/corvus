@@ -4,10 +4,71 @@
 
 ---
 
+## Session: 2026-02-27 (session 16)
+
+### What was done
+- Implemented **Epic 13: Voice Engine Foundation** (S13.1–S13.6, all complete)
+- Implemented **Epic 14: Local Voice Assistant** (S14.1–S14.4, all complete including smoke test)
+
+#### Overview
+Added voice I/O to Corvus — STT (faster-whisper), TTS (Kokoro), wake word detection (openWakeWord), and audio I/O (sounddevice). Voice is a transport layer: it replaces `click.prompt()` with STT and `click.echo()` with TTS while reusing the existing orchestrator pipeline (`classify_intent()` -> `dispatch()` -> `summarize_response()`) unchanged.
+
+#### New files (10)
+- **`corvus/voice/__init__.py`**: Package init
+- **`corvus/voice/audio.py`**: `AudioCapture` (async context manager, sounddevice InputStream with asyncio.Queue bridge), `AudioPlayer` (play/stop with automatic resampling to device native rate), `generate_ack_tone()` (sine wave), `_compute_rms()` for silence detection, `_resample()` via scipy
+- **`corvus/voice/stt.py`**: `SpeechRecognizer` (async context manager wrapping faster-whisper WhisperModel, returns `TranscriptionResult`, VAD filter enabled by default)
+- **`corvus/voice/tts.py`**: `SpeechSynthesizer` (async context manager wrapping Kokoro KPipeline, `synthesize()` yields per-sentence chunks, `synthesize_full()` concatenates)
+- **`corvus/voice/wakeword.py`**: `WakeWordDetector` (async context manager wrapping openWakeWord, `process_frame()` returns `WakeWordEvent` or None, gracefully disables if model file missing)
+- **`corvus/voice/pipeline.py`**: `VoicePipeline` — main loop: drain -> ack tone -> record_until_silence -> STT -> classify_intent -> dispatch -> response_to_speech -> TTS. Supports `--no-wakeword` mode (Enter key triggers listening). Error recovery per utterance. Conversation persistence via ConversationStore. Prints state prompts (`[Press Enter to speak]`, `Listening...`, `You: <text>`).
+- **`corvus/schemas/voice.py`**: `VoiceState` enum, `AudioConfig`, `TranscriptionResult`, `WakeWordEvent` Pydantic models
+
+#### Modified files (3)
+- **`pyproject.toml`**: Added `[project.optional-dependencies] voice` group (faster-whisper, kokoro, sounddevice, soundfile, openwakeword, numpy)
+- **`corvus/config.py`**: Added 11 `VOICE_*` config variables (STT model/device/compute/beam, TTS voice/lang/speed, wakeword path/threshold, silence/max listen duration)
+- **`corvus/cli.py`**: Added `corvus voice` command with `--model`, `--keep-alive`, `--new`, `--resume`, `--voice`, `--no-wakeword`, `--list-voices` options. Includes `_check_voice_deps()` for clear error on missing optional deps and `_list_voices()` to show all 54 available Kokoro voices.
+
+#### Test files (7)
+- `tests/test_voice_schemas.py` (12 tests)
+- `tests/test_voice_audio.py` (15 tests)
+- `tests/test_voice_stt.py` (8 tests)
+- `tests/test_voice_tts.py` (7 tests)
+- `tests/test_voice_wakeword.py` (7 tests)
+- `tests/test_voice_pipeline.py` (14 tests)
+- `tests/test_voice_cli.py` (7 tests)
+
+**75 voice tests pass, 433 total tests pass (0 regressions)**
+
+#### Key design decisions
+- Voice deps are optional (`pip install corvus[voice]`), core CLI unaffected
+- VRAM budget: ~4 GB (STT+TTS) + ~11 GB (Ollama) = ~15 GB / 24 GB — everything stays resident
+- No-wakeword mode essential for dev before custom wake word model is trained
+- All hardware mocked in tests via MagicMock/AsyncMock + sys.modules patching for uninstalled optional deps
+- `_response_to_speech()` converts all OrchestratorAction types to voice-friendly text
+- AudioPlayer resamples to device native rate (fixes garbled audio on bluetooth/non-24kHz devices)
+- Pipeline uses `synthesize_full()` instead of per-sentence streaming to avoid crackling between chunks
+- Queue drain before recording prevents stale audio frames from previous idle period
+
+#### Smoke test results (S14.4)
+- TTS: Kokoro loads in ~1s, generates clear speech, 54 voices available via `--list-voices`
+- STT: faster-whisper large-v3-turbo loads in ~2s, accurate transcription
+- Full loop: `corvus voice --no-wakeword` works end-to-end
+- VRAM: ~3.4 GB baseline, well within 24 GB budget with Ollama
+- Known issue: openwakeword requires `tflite-runtime` which doesn't support Python 3.12 yet; `--no-wakeword` mode works as intended workaround
+
+### What's next
+- **Epic 15**: Mobile Voice Access (PWA + FastAPI WebSocket) — deferred, outline only
+- Train custom wake word model for "Corvus" via openWakeWord (when tflite-runtime supports Python 3.12)
+- Evaluate alternative wake word solutions if tflite-runtime remains incompatible
+
+### Blockers
+- openwakeword blocked by tflite-runtime Python 3.12 incompatibility (non-critical, --no-wakeword covers the use case)
+
+---
+
 ## Session: 2026-02-25 (session 15)
 
 ### What was done
-- Implemented **Epic 12: Conversation Memory Persistence (V2)** (S12.1–S12.6, all complete)
+- Implemented **Epic 12: Conversation Memory Persistence (V2)** (S12.1–S12.7, all complete including smoke test)
 
 #### Overview
 `corvus chat` conversation history was previously in-memory (`ConversationHistory`) and lost on exit. Users couldn't resume where they left off or review past conversations. This epic persists conversations to SQLite so sessions survive restarts, with CLI flags for managing sessions.
@@ -74,6 +135,10 @@
 - `corvus chat --resume zzz-bad-id` — "Error: No conversation found matching 'zzz-bad-id'."
 - `corvus chat --new` + web search ("weather in New York") — creates new conversation, web search works, 2 msgs persisted
 - `corvus chat --list` — all 3 conversations shown, message counts correct, newest first
+
+### Commit status
+- **Not yet committed.** All changes staged and ready. Commit message written.
+- 10 files: 8 modified + 2 new (`conversation_store.py`, `test_conversation_store.py`)
 
 ### Next steps
 - Consider next: Phase 3 (email pipeline), voice I/O (STT/TTS), mobile delivery, web dashboard

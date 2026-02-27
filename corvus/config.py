@@ -61,6 +61,22 @@ WEB_SEARCH_FETCH_TIMEOUT: int = int(_internal.get("WEB_SEARCH_FETCH_TIMEOUT", "1
 CHAT_MODEL: str = _internal.get("CHAT_MODEL", "")
 
 
+# --- Voice I/O ---
+VOICE_STT_MODEL: str = _internal.get("VOICE_STT_MODEL", "large-v3-turbo")
+VOICE_STT_COMPUTE_TYPE: str = _internal.get("VOICE_STT_COMPUTE_TYPE", "int8_float16")
+VOICE_STT_DEVICE: str = _internal.get("VOICE_STT_DEVICE", "cuda")
+VOICE_STT_BEAM_SIZE: int = int(_internal.get("VOICE_STT_BEAM_SIZE", "5"))
+VOICE_TTS_VOICE: str = _internal.get("VOICE_TTS_VOICE", "af_heart")
+VOICE_TTS_LANG_CODE: str = _internal.get("VOICE_TTS_LANG_CODE", "a")
+VOICE_TTS_SPEED: float = float(_internal.get("VOICE_TTS_SPEED", "1.0"))
+VOICE_WAKEWORD_MODEL_PATH: str = _internal.get(
+    "VOICE_WAKEWORD_MODEL_PATH", str(PROJECT_ROOT / "models" / "corvus.onnx")
+)
+VOICE_WAKEWORD_THRESHOLD: float = float(_internal.get("VOICE_WAKEWORD_THRESHOLD", "0.5"))
+VOICE_SILENCE_DURATION: float = float(_internal.get("VOICE_SILENCE_DURATION", "1.5"))
+VOICE_MAX_LISTEN_DURATION: float = float(_internal.get("VOICE_MAX_LISTEN_DURATION", "30.0"))
+
+
 def load_external() -> dict[str, str | None]:
     """Load external secrets on demand. Only call when needed (Phase 3+)."""
     return _load("external")
