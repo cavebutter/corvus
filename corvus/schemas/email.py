@@ -62,6 +62,7 @@ class EmailCategory(StrEnum):
 
     SPAM = "spam"
     NEWSLETTER = "newsletter"
+    JOB_ALERT = "job_alert"
     RECEIPT = "receipt"
     INVOICE = "invoice"
     PACKAGE_NOTICE = "package_notice"

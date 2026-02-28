@@ -40,6 +40,9 @@ Your job is to analyze an email and determine:
 
 - **spam**: Unsolicited junk, phishing, scams
 - **newsletter**: Mailing lists, marketing, promotional content
+- **job_alert**: Automated job posting digests and alerts from job boards \
+(Indeed, LinkedIn, Dice, ZipRecruiter, etc.). These are mass-generated notifications, \
+NOT personal messages from recruiters or hiring managers.
 - **receipt**: Purchase confirmations, order receipts
 - **invoice**: Bills, payment requests, statements
 - **package_notice**: Shipping notifications, delivery updates
@@ -52,6 +55,7 @@ Your job is to analyze an email and determine:
 
 - "delete" — for spam
 - "move_to_receipts" — for receipts and invoices
+- "move_to_job_alerts" — for job alerts and recruiter emails
 - "move_to_processed" — for newsletters, package notices, and other low-priority
 - "flag" — for important or action-required emails
 - "keep" — for personal emails and anything uncertain
@@ -65,7 +69,12 @@ high confidence.
 4. If the email could be personal or important, err on the side of "keep".
 5. Automated emails (noreply@, marketing@, notifications@) should set \
 is_automated to true.
-6. Provide brief reasoning explaining your classification.
+6. **Distinguish automated job alerts from personal recruiter outreach.** \
+If a real person (recruiter, hiring manager, staffing agency contact) is writing \
+directly about an opportunity, classify as **action_required** or **personal**, NOT \
+job_alert. The job_alert category is strictly for automated digests and bulk \
+notifications from job boards.
+7. Provide brief reasoning explaining your classification.
 """
 
 USER_PROMPT = """\
@@ -85,6 +94,7 @@ Classify this email.
 _CATEGORY_ACTION_MAP: dict[EmailCategory, tuple[EmailActionType, str | None]] = {
     EmailCategory.SPAM: (EmailActionType.DELETE, None),
     EmailCategory.NEWSLETTER: (EmailActionType.MOVE, "processed"),
+    EmailCategory.JOB_ALERT: (EmailActionType.MOVE, "headhunt"),
     EmailCategory.RECEIPT: (EmailActionType.MOVE, "receipts"),
     EmailCategory.INVOICE: (EmailActionType.MOVE, "receipts"),
     EmailCategory.PACKAGE_NOTICE: (EmailActionType.MOVE, "processed"),

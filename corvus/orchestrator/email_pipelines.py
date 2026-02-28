@@ -192,6 +192,7 @@ async def run_email_summary(
     ollama: OllamaClient,
     model: str,
     keep_alive: str = "5m",
+    limit: int = 50,
     on_progress: Callable[[str], None] | None = None,
 ) -> EmailSummaryResult:
     """Summarize unread emails in an account's inbox.
@@ -222,7 +223,7 @@ async def run_email_summary(
     async with ImapClient(account_config) as imap:
         inbox_folder = account_config.folders.get("inbox", "INBOX")
         _emit(f"Fetching emails from {inbox_folder}...")
-        messages = await imap.fetch_messages(inbox_folder, limit=100)
+        messages = await imap.fetch_messages(inbox_folder, limit=limit)
 
         if not messages:
             _emit("No unread emails.")

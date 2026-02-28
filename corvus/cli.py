@@ -1313,17 +1313,21 @@ async def _email_review_async() -> None:
 
 @email.command("summary")
 @click.option("--account", "-a", default=None, help="Account email (default: all).")
+@click.option("--limit", "-n", default=50, show_default=True, help="Max emails to summarize.")
 @click.option("--model", "-m", default=None, help="Ollama model name.")
 @click.option("--keep-alive", default="5m", show_default=True, help="Ollama keep_alive duration.")
-def email_summary(account: str | None, model: str | None, keep_alive: str) -> None:
-    """Summarize unread emails."""
+def email_summary(
+    account: str | None, limit: int, model: str | None, keep_alive: str
+) -> None:
+    """Summarize unread emails (most recent first)."""
     accounts = _validate_email_config()
     targets = _find_email_account(accounts, account)
-    asyncio.run(_email_summary_async(targets, model, keep_alive))
+    asyncio.run(_email_summary_async(targets, limit, model, keep_alive))
 
 
 async def _email_summary_async(
     accounts: list[dict],
+    limit: int,
     model: str | None,
     keep_alive: str,
 ) -> None:
@@ -1345,6 +1349,7 @@ async def _email_summary_async(
                 ollama=ollama,
                 model=resolved_model,
                 keep_alive=keep_alive,
+                limit=limit,
                 on_progress=click.echo,
             )
 

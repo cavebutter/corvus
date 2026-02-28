@@ -38,6 +38,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _SELECT_BY_ID = "SELECT * FROM email_review_queue WHERE id = ?"
+_SELECT_PENDING_BY_UID = (
+    "SELECT * FROM email_review_queue "
+    "WHERE account_email = ? AND uid = ? AND status = 'pending' "
+    "LIMIT 1"
+)
+_UPDATE_TASK = """
+UPDATE email_review_queue SET task_json = ?, subject = ?, from_address = ? WHERE id = ?
+"""
 _SELECT_PENDING = (
     "SELECT * FROM email_review_queue WHERE status = 'pending' ORDER BY created_at ASC"
 )
@@ -97,9 +105,33 @@ class EmailReviewQueue:
     def add(self, task: EmailTriageTask) -> EmailReviewQueueItem:
         """Add a new email triage task to the review queue.
 
+        If a pending entry already exists for the same (account_email, uid),
+        the existing entry is updated with the new classification instead of
+        creating a duplicate.
+
         Returns:
-            The created EmailReviewQueueItem with a generated ID and timestamp.
+            The created or updated EmailReviewQueueItem.
         """
+        # Check for existing pending entry (dedup on re-triage)
+        existing = self._conn.execute(
+            _SELECT_PENDING_BY_UID, (task.account_email, task.uid)
+        ).fetchone()
+
+        if existing is not None:
+            item = _row_to_item(existing)
+            self._conn.execute(
+                _UPDATE_TASK,
+                (task.model_dump_json(), task.subject, task.from_address, item.id),
+            )
+            self._conn.commit()
+            logger.info(
+                "Updated existing queue entry for email %s (queue_id=%s)",
+                task.uid,
+                item.id,
+            )
+            item.task = task
+            return item
+
         item_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 

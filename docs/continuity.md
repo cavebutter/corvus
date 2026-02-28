@@ -44,10 +44,25 @@
 - Extraction runs inline during triage (immediate while body is in memory)
 - Gmail handling via `is_gmail` flag (explicit, not auto-detect)
 
-### Next steps
-- Create `secrets/email_accounts.json` with real account (app password for Gmail)
-- Test against live IMAP server: `corvus email triage --limit 5`
-- Train custom "hey corvus" wake word (open task from session 17)
+### Git status at compaction
+- Commit message written but **not yet committed** — user handles all git ops
+- `tools/` was accidentally staged (embedded git repo warning) — fixed: `git rm --cached tools/atlas-voice-training`, added `tools/` to `.gitignore`
+- All changes staged except the `git rm --cached` step which user needs to run
+
+### Current state
+- User is setting up `secrets/email_accounts.json` for first live test
+- First account is a **personal domain on PurelyMail** (standard IMAP, `is_gmail: false`)
+- User has existing IMAP folders they want Corvus to file to eventually
+- Config includes extra folders beyond the 3 triage uses today (inbox/processed/receipts) for future explicit filing ("file this to the stripe folder")
+
+### Immediate next steps
+1. User finishes `secrets/email_accounts.json` setup
+2. Live test: `corvus email triage --limit 5`
+3. Debug any issues with real IMAP/LLM interaction
+4. `corvus email review` to approve/reject queued actions
+
+### Open tasks (deferred)
+- Train custom "hey corvus" wake word (tools/atlas-voice-training cloned, nvidia-container-toolkit not yet installed)
 
 ---
 
