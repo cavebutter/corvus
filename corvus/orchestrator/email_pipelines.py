@@ -11,9 +11,12 @@ from corvus.audit.email_logger import EmailAuditLog
 from corvus.integrations.imap import ImapClient
 from corvus.integrations.ollama import OllamaClient
 from corvus.queue.email_review import EmailReviewQueue
+from corvus.schemas.document_tagging import GateAction
 from corvus.schemas.email import (
     ActionItem,
     EmailAccountConfig,
+    EmailAction,
+    EmailActionType,
     EmailCategory,
     EmailSummaryResult,
     EmailTriageResult,
@@ -32,6 +35,7 @@ async def run_email_triage(
     force_queue: bool = True,
     review_db_path: str,
     audit_log_path: str,
+    sender_lists_path: str | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> EmailTriageResult:
     """Triage unread emails in an account's inbox.
@@ -58,7 +62,8 @@ async def run_email_triage(
     """
     from corvus.executors.email_classifier import classify_email
     from corvus.executors.email_extractor import EXTRACTABLE_CATEGORIES, extract_email_data
-    from corvus.router.email import route_email_action
+    from corvus.router.email import execute_email_action, route_email_action
+    from corvus.sender_lists import SenderListManager
 
     def _emit(msg: str) -> None:
         if on_progress:
@@ -67,10 +72,16 @@ async def run_email_triage(
     audit_log = EmailAuditLog(audit_log_path)
     folders = account_config.folders
 
+    # Load sender lists
+    sender_lists: SenderListManager | None = None
+    if sender_lists_path:
+        sender_lists = SenderListManager.load(sender_lists_path)
+
     processed = 0
     auto_acted = 0
     queued = 0
     errors = 0
+    sender_list_acted = 0
     categories: dict[str, int] = {}
 
     async with ImapClient(account_config) as imap:
@@ -100,7 +111,35 @@ async def run_email_triage(
                         f"\n  From: {email.from_address}"
                     )
 
-                    # Classify
+                    # Check sender lists before LLM
+                    match = sender_lists.lookup(email.from_address) if sender_lists else None
+
+                    if match and match.list_name != "white":
+                        # Non-white list: skip LLM, build deterministic task,
+                        # execute immediately (bypass force_queue)
+                        task = sender_lists.build_task_from_sender_match(
+                            email, match, folders
+                        )
+                        category = task.classification.category.value
+                        categories[category] = categories.get(category, 0) + 1
+
+                        _emit(
+                            f"  Sender list: {match.list_name} -> "
+                            f"{task.proposed_action.action_type.value}"
+                        )
+
+                        await execute_email_action(task, imap=imap)
+                        audit_log.log_sender_list_applied(task)
+                        auto_acted += 1
+                        sender_list_acted += 1
+                        processed += 1
+                        continue
+
+                    # White list: still classify (need summary + action items),
+                    # but force KEEP action and queue for review
+                    force_keep = match is not None and match.list_name == "white"
+
+                    # Classify via LLM
                     task, _raw = await classify_email(
                         email,
                         ollama=ollama,
@@ -109,6 +148,16 @@ async def run_email_triage(
                         keep_alive=keep_alive,
                     )
 
+                    # Override for whitelisted senders
+                    if force_keep:
+                        task = task.model_copy(update={
+                            "sender_list": "white",
+                            "proposed_action": EmailAction(
+                                action_type=EmailActionType.KEEP,
+                            ),
+                            "gate_action": GateAction.QUEUE_FOR_REVIEW,
+                        })
+
                     category = task.classification.category.value
                     categories[category] = categories.get(category, 0) + 1
 
@@ -116,6 +165,8 @@ async def run_email_triage(
                         f"  Category: {category} "
                         f"(confidence={task.overall_confidence:.0%})"
                     )
+                    if force_keep:
+                        _emit("  Sender list: white (KEEP, queued for review)")
                     if task.classification.summary:
                         _emit(f"  Summary: {task.classification.summary}")
 
@@ -174,7 +225,10 @@ async def run_email_triage(
                     )
                     _emit("  ERROR: Failed to process (see log for details)")
 
-    _emit(f"\nDone. Processed: {processed}, Auto: {auto_acted}, Queued: {queued}, Errors: {errors}")
+    _emit(
+        f"\nDone. Processed: {processed}, Auto: {auto_acted} "
+        f"(sender list: {sender_list_acted}), Queued: {queued}, Errors: {errors}"
+    )
 
     return EmailTriageResult(
         account_email=account_config.email,
@@ -193,6 +247,7 @@ async def run_email_summary(
     model: str,
     keep_alive: str = "5m",
     limit: int = 50,
+    sender_lists_path: str | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> EmailSummaryResult:
     """Summarize unread emails in an account's inbox.
@@ -215,10 +270,16 @@ async def run_email_summary(
     """
     from corvus.executors.email_classifier import classify_email
     from corvus.executors.email_extractor import EXTRACTABLE_CATEGORIES, extract_email_data
+    from corvus.sender_lists import SenderListManager
 
     def _emit(msg: str) -> None:
         if on_progress:
             on_progress(msg)
+
+    # Load sender lists
+    sender_lists: SenderListManager | None = None
+    if sender_lists_path:
+        sender_lists = SenderListManager.load(sender_lists_path)
 
     async with ImapClient(account_config) as imap:
         inbox_folder = account_config.folders.get("inbox", "INBOX")
@@ -241,6 +302,10 @@ async def run_email_summary(
 
         for email in messages:
             try:
+                # Check if sender is whitelisted
+                match = sender_lists.lookup(email.from_address) if sender_lists else None
+                is_whitelisted = match is not None and match.list_name == "white"
+
                 task, _raw = await classify_email(
                     email,
                     ollama=ollama,
@@ -252,15 +317,15 @@ async def run_email_summary(
                 cat = task.classification.category.value
                 by_category[cat] = by_category.get(cat, 0) + 1
 
-                # Track important subjects
-                if task.classification.category in (
+                # Track important subjects — whitelisted senders always included
+                if is_whitelisted or task.classification.category in (
                     EmailCategory.IMPORTANT,
                     EmailCategory.ACTION_REQUIRED,
                 ):
                     important_subjects.append(email.subject)
 
-                # Extract action items
-                if task.classification.category in EXTRACTABLE_CATEGORIES:
+                # Extract action items — whitelisted senders always get extraction
+                if is_whitelisted or task.classification.category in EXTRACTABLE_CATEGORIES:
                     try:
                         extraction, _raw2 = await extract_email_data(
                             email,

@@ -119,6 +119,7 @@ class EmailTriageTask(BaseModel):
     proposed_action: EmailAction
     overall_confidence: float = Field(ge=0.0, le=1.0)
     gate_action: GateAction
+    sender_list: str | None = None  # name of the sender list that matched, if any
 
 
 # --- Extraction ---
@@ -198,7 +199,11 @@ class EmailAuditEntry(BaseModel):
 
     timestamp: datetime
     action: Literal[
-        "auto_applied", "queued_for_review", "review_approved", "review_rejected"
+        "auto_applied",
+        "queued_for_review",
+        "review_approved",
+        "review_rejected",
+        "sender_list_applied",
     ]
     account_email: str
     uid: str

@@ -235,6 +235,43 @@ class TestImapClientEnsureFolders:
         mock_folder.create.assert_not_called()
 
 
+class TestImapClientFetchUidsOlderThan:
+    """fetch_uids_older_than uses server-side date filtering."""
+
+    async def test_returns_uids_for_old_messages(self):
+        config = _make_config()
+        client = ImapClient(config)
+
+        old_msg1 = MockMailMessage(uid="10")
+        old_msg2 = MockMailMessage(uid="20")
+
+        mock_folder = MagicMock()
+        mock_mailbox = MagicMock()
+        mock_mailbox.folder = mock_folder
+        mock_mailbox.fetch = MagicMock(return_value=[old_msg1, old_msg2])
+        client._mailbox = mock_mailbox
+
+        uids = await client.fetch_uids_older_than("Corvus/Ads", days=14)
+
+        assert uids == ["10", "20"]
+        mock_folder.set.assert_called_once_with("Corvus/Ads")
+        mock_mailbox.fetch.assert_called_once()
+
+    async def test_returns_empty_for_no_matches(self):
+        config = _make_config()
+        client = ImapClient(config)
+
+        mock_folder = MagicMock()
+        mock_mailbox = MagicMock()
+        mock_mailbox.folder = mock_folder
+        mock_mailbox.fetch = MagicMock(return_value=[])
+        client._mailbox = mock_mailbox
+
+        uids = await client.fetch_uids_older_than("INBOX", days=30)
+
+        assert uids == []
+
+
 class TestImapClientMailboxProperty:
     """Accessing .mailbox before connecting should raise RuntimeError."""
 

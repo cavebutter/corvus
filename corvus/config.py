@@ -88,6 +88,9 @@ EMAIL_AUDIT_LOG_PATH: str = _internal.get(
     "EMAIL_AUDIT_LOG_PATH", str(PROJECT_ROOT / "data" / "email_audit.log")
 )
 EMAIL_BATCH_SIZE: int = int(_internal.get("EMAIL_BATCH_SIZE", "50"))
+EMAIL_SENDER_LISTS_PATH: str = _internal.get(
+    "EMAIL_SENDER_LISTS_PATH", str(PROJECT_ROOT / "data" / "sender_lists.json")
+)
 
 
 def load_email_accounts() -> list[dict]:

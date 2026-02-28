@@ -14,5 +14,5 @@
 
 ---
 
-*Completed epics (1–14, 16–18) are in `backlog_archive.md`.*
+*Completed epics (1–14, 16–19) are in `backlog_archive.md`.*
 *Candidates for future work: Phase 4 (calendar/task integration), mobile delivery, web dashboard.*

@@ -4,6 +4,61 @@
 
 ---
 
+## Session: 2026-02-27 (session 19) — Email Sender Lists and Rules
+
+### What was done
+- **Complete Epic 19: Email Sender Lists and Rules** — deterministic sender-based handling before LLM classification
+  - Created `corvus/schemas/sender_lists.py` — Pydantic models (SenderListConfig, SenderListsFile, SenderMatch)
+  - Created `corvus/sender_lists.py` — SenderListManager with O(1) lookup, add/remove, rationalize, atomic JSON save, `build_task_from_sender_match()`
+  - Added `EMAIL_SENDER_LISTS_PATH` config to `corvus/config.py`
+  - Added `sender_list: str | None` field to `EmailTriageTask` schema
+  - Added `"sender_list_applied"` audit action to `EmailAuditEntry`
+  - Added `log_sender_list_applied()` to email audit logger
+  - Modified `run_email_triage()` — checks sender lists before LLM; white list still classifies but forces KEEP; black/vendor/headhunter skip LLM and execute directly (bypass force_queue)
+  - Modified `run_email_summary()` — whitelisted senders always in important_subjects and always get extraction
+  - Added `fetch_uids_older_than()` to ImapClient for server-side date filtering
+  - Added CLI commands: `corvus email lists`, `list-add`, `list-remove`, `rationalize`, `cleanup`
+  - Enhanced `corvus email review` — `[l]ist` option to add sender during review; `[m]ove` option to pick an IMAP folder (lazy-loaded, cached); auto-applies pending items from known lists at review start
+  - Passed `sender_lists_path` through CLI triage and summary commands
+  - Fixed pre-existing test gap (JOB_ALERT category count in test_email_schemas.py)
+  - Created `tests/test_sender_lists.py` (31 tests)
+  - Added 10 triage/summary sender list integration tests to `tests/test_email_pipeline.py`
+  - Added 10 CLI tests to `tests/test_email_cli.py`
+  - Added 2 IMAP tests to `tests/test_email_imap.py`
+  - Full suite: **605 passed**, 0 failed
+
+### Architecture decisions
+- JSON file at `data/sender_lists.json` (not SQLite) — user preference, loaded once per run
+- Priority order in JSON — user-editable, no code change to reorder
+- Sender list matches bypass `force_queue` — explicit user rules, not LLM guesses
+- White list is special — only list that does NOT skip LLM (needs classification for summaries/action items)
+- All addresses case-insensitive (lowercased on storage and lookup)
+- Atomic JSON writes (temp file + rename)
+
+### New files
+- `corvus/schemas/sender_lists.py`
+- `corvus/sender_lists.py`
+- `tests/test_sender_lists.py`
+
+### Modified files
+- `corvus/config.py` — added EMAIL_SENDER_LISTS_PATH
+- `corvus/schemas/email.py` — sender_list field, sender_list_applied audit action
+- `corvus/audit/email_logger.py` — log_sender_list_applied()
+- `corvus/orchestrator/email_pipelines.py` — sender list check in triage + summary
+- `corvus/integrations/imap.py` — fetch_uids_older_than()
+- `corvus/cli.py` — new commands + triage/summary/review updates
+- `tests/test_email_schemas.py` — fixed JOB_ALERT test gap
+- `tests/test_email_pipeline.py` — sender list integration tests
+- `tests/test_email_cli.py` — CLI command tests
+- `tests/test_email_imap.py` — fetch_uids_older_than test
+
+### Next steps
+- Seed `data/sender_lists.json` with real addresses as trust is established
+- Consider web dashboard for list management (Phase 4+)
+- Move Epic 19 to backlog_archive.md
+
+---
+
 ## Session: 2026-02-27 (session 18) — Email Pipeline (Phase 3)
 
 ### What was done

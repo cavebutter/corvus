@@ -227,3 +227,16 @@
 - [x] **S18.2** Inbox summarization via LLM — `run_email_summary()` classifies all unread, extracts action items, generates natural language summary
 - [x] **S18.3** Daily digest integration — added email stats fields to `DailyDigest` model, `generate_digest()` accepts optional email audit/queue, `render_text()` includes email section
 - [x] **S18.4** Voice integration — email result handling in `_response_to_speech()` and `summarize_response()` for both EmailTriageResult and EmailSummaryResult
+
+---
+
+## Epic 19: Email Sender Lists and Rules
+
+**Goal:** Deterministic, user-defined handling of known email senders — bypassing LLM classification for blacklisted/vendor/headhunter senders, while ensuring whitelisted humans are always featured in summaries. Follows "deterministic over probabilistic" principle.
+
+- [x] **S19.1** Schemas, core manager, config — `corvus/schemas/sender_lists.py` (SenderListConfig, SenderListsFile, SenderMatch), `corvus/sender_lists.py` (SenderListManager with O(1) lookup, add/remove, rationalize, atomic JSON save, `build_task_from_sender_match()`), `EMAIL_SENDER_LISTS_PATH` config, 31 tests
+- [x] **S19.2** Triage pipeline integration — sender list check before LLM in `run_email_triage()`, non-white lists skip LLM and execute immediately (bypass `force_queue`), white list still classifies but forces KEEP + QUEUE_FOR_REVIEW, `sender_list` field on EmailTriageTask, `sender_list_applied` audit action, 7 tests
+- [x] **S19.3** Summary pipeline integration — whitelisted senders always added to `important_subjects` and always get action item extraction in `run_email_summary()`, 3 tests
+- [x] **S19.4** CLI list management commands — `corvus email lists` (display all), `list-add` (add sender), `list-remove` (remove sender), `rationalize` (dedup + resolve conflicts), passed `sender_lists_path` through triage/summary CLI commands, 8 tests
+- [x] **S19.5** Review integration — `[l]ist` option during review prompt (show lists, pick one, add sender, apply action), `[m]ove` option to pick an IMAP folder (lazy-loaded, cached per account), auto-apply pending items whose senders are on a non-white list at review start
+- [x] **S19.6** Folder cleanup — `fetch_uids_older_than()` on ImapClient (server-side IMAP BEFORE search), `corvus email cleanup [--account] [--dry-run]` CLI command to delete messages older than `cleanup_days` from folders with retention policies, 4 tests

@@ -31,6 +31,7 @@ from corvus.config import (
     EMAIL_AUDIT_LOG_PATH,
     EMAIL_BATCH_SIZE,
     EMAIL_REVIEW_DB_PATH,
+    EMAIL_SENDER_LISTS_PATH,
     OLLAMA_BASE_URL,
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
@@ -1199,6 +1200,7 @@ async def _email_triage_async(
                 force_queue=not apply_actions,
                 review_db_path=EMAIL_REVIEW_DB_PATH,
                 audit_log_path=EMAIL_AUDIT_LOG_PATH,
+                sender_lists_path=EMAIL_SENDER_LISTS_PATH,
                 on_progress=click.echo,
             )
 
@@ -1225,8 +1227,10 @@ async def _email_review_async() -> None:
     from corvus.queue.email_review import EmailReviewQueue
     from corvus.router.email import execute_email_action
     from corvus.schemas.email import EmailAccountConfig
+    from corvus.sender_lists import SenderListManager
 
     audit_log = EmailAuditLog(EMAIL_AUDIT_LOG_PATH)
+    sender_lists = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
 
     with EmailReviewQueue(EMAIL_REVIEW_DB_PATH) as review_queue:
         pending = review_queue.list_pending()
@@ -1234,21 +1238,87 @@ async def _email_review_async() -> None:
             click.echo("No pending email actions to review.")
             return
 
-        click.echo(f"Found {len(pending)} pending email action(s).\n")
-
-        approved = 0
-        rejected = 0
-        skipped = 0
-
         # Group by account for IMAP connections
         accounts_cache: dict[str, EmailAccountConfig] = {}
         all_accounts = load_email_accounts()
         for a in all_accounts:
             accounts_cache[a["email"]] = EmailAccountConfig(**a)
 
-        for i, item in enumerate(pending, 1):
+        # Auto-apply pending items whose senders are on a non-white list
+        auto_applied_ids: set[str] = set()
+        for item in pending:
+            match = sender_lists.lookup(item.task.from_address)
+            if match and match.list_name != "white":
+                account_config = accounts_cache.get(item.task.account_email)
+                if not account_config:
+                    continue
+                # Build deterministic task from sender list
+                sl_task = sender_lists.build_task_from_sender_match(
+                    # Build a minimal EmailMessage-like object from the task fields
+                    type("_Email", (), {
+                        "uid": item.task.uid,
+                        "account_email": item.task.account_email,
+                        "from_address": item.task.from_address,
+                        "subject": item.task.subject,
+                    })(),
+                    match,
+                    account_config.folders,
+                )
+                try:
+                    async with ImapClient(account_config) as imap:
+                        await execute_email_action(sl_task, imap=imap)
+                    review_queue.approve(
+                        item.id,
+                        notes=f"Auto-applied: sender on '{match.list_name}' list",
+                    )
+                    audit_log.log_sender_list_applied(sl_task)
+                    auto_applied_ids.add(item.id)
+                except Exception:
+                    logger.exception(
+                        "Error auto-applying sender list action for %s", item.task.uid
+                    )
+
+        if auto_applied_ids:
+            click.echo(
+                f"Auto-applied {len(auto_applied_ids)} item(s) "
+                f"from sender lists.\n"
+            )
+
+        # Filter out auto-applied items
+        remaining = [p for p in pending if p.id not in auto_applied_ids]
+
+        if not remaining:
+            click.echo("No remaining items to review.")
+            return
+
+        click.echo(f"Found {len(remaining)} pending email action(s).\n")
+
+        approved = 0
+        rejected = 0
+        skipped = 0
+
+        # Lazy-loaded folder cache: account_email -> list of folder names
+        folders_cache: dict[str, list[str]] = {}
+
+        async def _get_folders(acct_email: str) -> list[str]:
+            """Fetch and cache IMAP folder list for an account."""
+            if acct_email in folders_cache:
+                return folders_cache[acct_email]
+            acct_cfg = accounts_cache.get(acct_email)
+            if not acct_cfg:
+                return []
+            try:
+                async with ImapClient(acct_cfg) as imap:
+                    folder_list = await imap.list_folders()
+                folders_cache[acct_email] = sorted(folder_list)
+                return folders_cache[acct_email]
+            except Exception:
+                logger.exception("Error listing folders for %s", acct_email)
+                return []
+
+        for i, item in enumerate(remaining, 1):
             task = item.task
-            click.echo(f"--- [{i}/{len(pending)}] Email from {task.from_address} ---")
+            click.echo(f"--- [{i}/{len(remaining)}] Email from {task.from_address} ---")
             click.echo(f"  Subject: {task.subject}")
             click.echo(f"  Account: {task.account_email}")
             click.echo(f"  Category: {task.classification.category.value}")
@@ -1262,8 +1332,8 @@ async def _email_review_async() -> None:
 
             choice = click.prompt(
                 "  Action",
-                type=click.Choice(["a", "r", "s", "q"], case_sensitive=False),
-                prompt_suffix=" [a]pprove / [r]eject / [s]kip / [q]uit: ",
+                type=click.Choice(["a", "r", "s", "l", "m", "q"], case_sensitive=False),
+                prompt_suffix=" [a]pprove / [r]eject / [s]kip / [l]ist / [m]ove / [q]uit: ",
             )
 
             if choice == "a":
@@ -1301,6 +1371,132 @@ async def _email_review_async() -> None:
             elif choice == "s":
                 click.echo("  -> Skipped.")
                 skipped += 1
+            elif choice == "m":
+                # Move to a user-selected IMAP folder
+                folder_list = await _get_folders(task.account_email)
+                if not folder_list:
+                    click.echo("  Could not retrieve folder list.", err=True)
+                    continue
+
+                click.echo("  Folders:")
+                for idx, fname in enumerate(folder_list, 1):
+                    click.echo(f"    {idx}. {fname}")
+
+                folder_choice = click.prompt(
+                    "  Move to folder",
+                    type=click.IntRange(1, len(folder_list)),
+                    default=None,
+                    show_default=False,
+                    prompt_suffix=f" [1-{len(folder_list)}, Enter to cancel]: ",
+                )
+
+                if folder_choice is not None:
+                    target_folder = folder_list[folder_choice - 1]
+                    account_config = accounts_cache.get(task.account_email)
+                    if not account_config:
+                        click.echo(
+                            f"  -> ERROR: Account {task.account_email} not found.",
+                            err=True,
+                        )
+                        continue
+
+                    try:
+                        async with ImapClient(account_config) as imap:
+                            await imap.move([task.uid], target_folder)
+                        review_queue.approve(
+                            item.id,
+                            notes=f"Moved to '{target_folder}' via CLI",
+                        )
+                        # Build a task reflecting the actual move for audit
+                        from corvus.schemas.email import EmailAction, EmailActionType
+
+                        move_task = task.model_copy(update={
+                            "proposed_action": EmailAction(
+                                action_type=EmailActionType.MOVE,
+                                target_folder=target_folder,
+                            ),
+                        })
+                        audit_log.log_review_approved(move_task)
+                        click.echo(f"  -> Moved to '{target_folder}'.")
+                        approved += 1
+                    except Exception:
+                        logger.exception(
+                            "Error moving email %s to %s", task.uid, target_folder
+                        )
+                        click.echo(
+                            "  -> ERROR: Failed to move. Item remains pending.",
+                            err=True,
+                        )
+            elif choice == "l":
+                # Show available lists and prompt to add sender
+                list_names = list(sender_lists.data.lists.keys())
+                if not list_names:
+                    click.echo("  No sender lists configured.")
+                    continue
+
+                click.echo("  Available lists:")
+                for idx, name in enumerate(list_names, 1):
+                    lst = sender_lists.data.lists[name]
+                    click.echo(f"    {idx}. {name} ({lst.action})")
+
+                list_choice = click.prompt(
+                    "  Add sender to list",
+                    type=click.IntRange(1, len(list_names)),
+                    default=None,
+                    show_default=False,
+                    prompt_suffix=f" [1-{len(list_names)}, Enter to cancel]: ",
+                )
+
+                if list_choice is not None:
+                    target_list = list_names[list_choice - 1]
+                    added = sender_lists.add(target_list, task.from_address)
+                    if added:
+                        click.echo(
+                            f"  -> Added '{task.from_address}' to '{target_list}'."
+                        )
+                        # If the list has an auto-action (not white), apply immediately
+                        match = sender_lists.lookup(task.from_address)
+                        if match and match.list_name != "white":
+                            account_config = accounts_cache.get(task.account_email)
+                            if account_config:
+                                sl_task = sender_lists.build_task_from_sender_match(
+                                    type("_Email", (), {
+                                        "uid": task.uid,
+                                        "account_email": task.account_email,
+                                        "from_address": task.from_address,
+                                        "subject": task.subject,
+                                    })(),
+                                    match,
+                                    account_config.folders,
+                                )
+                                try:
+                                    async with ImapClient(account_config) as imap:
+                                        await execute_email_action(sl_task, imap=imap)
+                                    review_queue.approve(
+                                        item.id,
+                                        notes=f"Added to '{target_list}' list via review",
+                                    )
+                                    audit_log.log_sender_list_applied(sl_task)
+                                    click.echo(
+                                        f"  -> Applied {match.action} action."
+                                    )
+                                    approved += 1
+                                except Exception:
+                                    logger.exception(
+                                        "Error applying list action for %s", task.uid
+                                    )
+                                    click.echo(
+                                        "  -> ERROR: Failed to apply action.",
+                                        err=True,
+                                    )
+                        else:
+                            click.echo(
+                                "  -> Added to whitelist (no action change)."
+                            )
+                    else:
+                        click.echo(
+                            f"  -> '{task.from_address}' already in '{target_list}'."
+                        )
             elif choice == "q":
                 click.echo("  -> Quitting review.")
                 break
@@ -1350,6 +1546,7 @@ async def _email_summary_async(
                 model=resolved_model,
                 keep_alive=keep_alive,
                 limit=limit,
+                sender_lists_path=EMAIL_SENDER_LISTS_PATH,
                 on_progress=click.echo,
             )
 
@@ -1371,6 +1568,175 @@ async def _email_summary_async(
                 for ai in result.action_items:
                     deadline = f" (by {ai.deadline})" if ai.deadline else ""
                     click.echo(f"  - {ai.description}{deadline}")
+
+
+@email.command("lists")
+def email_lists() -> None:
+    """Display all sender lists and addresses."""
+    from corvus.sender_lists import SenderListManager
+
+    mgr = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
+    data = mgr.data
+
+    if not data.lists:
+        click.echo("No sender lists configured.")
+        click.echo(f"File: {EMAIL_SENDER_LISTS_PATH}")
+        return
+
+    click.echo(f"Sender Lists ({EMAIL_SENDER_LISTS_PATH})")
+    click.echo(f"Priority order: {', '.join(data.priority)}\n")
+
+    for name in data.priority:
+        lst = data.lists.get(name)
+        if lst is None:
+            continue
+        action_desc = lst.action
+        if lst.folder_key:
+            action_desc += f" -> {lst.folder_key}"
+        if lst.cleanup_days:
+            action_desc += f" (cleanup: {lst.cleanup_days}d)"
+
+        click.echo(f"  {name} ({action_desc}) — {lst.description}")
+        if lst.addresses:
+            for addr in sorted(lst.addresses):
+                click.echo(f"    {addr}")
+        else:
+            click.echo("    (empty)")
+
+    # Show any lists not in priority
+    extra = [n for n in data.lists if n not in data.priority]
+    for name in extra:
+        lst = data.lists[name]
+        click.echo(f"  {name} ({lst.action}) — {lst.description}")
+        for addr in sorted(lst.addresses):
+            click.echo(f"    {addr}")
+
+
+@email.command("list-add")
+@click.argument("list_name")
+@click.argument("address")
+def email_list_add(list_name: str, address: str) -> None:
+    """Add a sender to a list."""
+    from corvus.sender_lists import SenderListManager
+
+    mgr = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
+    added = mgr.add(list_name, address)
+    if added:
+        click.echo(f"Added '{address.lower()}' to '{list_name}'.")
+    else:
+        click.echo(f"'{address.lower()}' is already in '{list_name}'.")
+
+
+@email.command("list-remove")
+@click.argument("list_name")
+@click.argument("address")
+def email_list_remove(list_name: str, address: str) -> None:
+    """Remove a sender from a list."""
+    from corvus.sender_lists import SenderListManager
+
+    mgr = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
+    removed = mgr.remove(list_name, address)
+    if removed:
+        click.echo(f"Removed '{address.lower()}' from '{list_name}'.")
+    else:
+        click.echo(f"'{address.lower()}' not found in '{list_name}'.")
+
+
+@email.command("rationalize")
+def email_rationalize() -> None:
+    """Dedup and resolve cross-list conflicts by priority."""
+    from corvus.sender_lists import SenderListManager
+
+    mgr = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
+    actions = mgr.rationalize()
+    if actions:
+        click.echo(f"Rationalized sender lists ({len(actions)} change(s)):")
+        for action in actions:
+            click.echo(f"  - {action}")
+    else:
+        click.echo("Sender lists are clean. No changes needed.")
+
+
+@email.command("cleanup")
+@click.option("--account", "-a", default=None, help="Account email (default: all).")
+@click.option("--dry-run", is_flag=True, help="Show what would be deleted without deleting.")
+def email_cleanup(account: str | None, dry_run: bool) -> None:
+    """Delete old messages from folders with retention policies (cleanup_days)."""
+    accounts = _validate_email_config()
+    targets = _find_email_account(accounts, account)
+    asyncio.run(_email_cleanup_async(targets, dry_run))
+
+
+async def _email_cleanup_async(accounts: list[dict], dry_run: bool) -> None:
+    from corvus.integrations.imap import ImapClient
+    from corvus.schemas.email import EmailAccountConfig
+    from corvus.sender_lists import SenderListManager
+
+    sender_lists = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
+
+    # Find lists with cleanup_days
+    cleanup_lists = []
+    for name, lst in sender_lists.data.lists.items():
+        if lst.cleanup_days and lst.folder_key:
+            cleanup_lists.append((name, lst))
+
+    if not cleanup_lists:
+        click.echo("No sender lists have cleanup_days configured.")
+        return
+
+    total_deleted = 0
+
+    for account_dict in accounts:
+        config = EmailAccountConfig(**account_dict)
+        click.echo(f"\nAccount: {config.name} ({config.email})")
+
+        async with ImapClient(config) as imap:
+            for list_name, lst in cleanup_lists:
+                folder = config.folders.get(lst.folder_key)
+                if not folder:
+                    click.echo(
+                        f"  {list_name}: folder_key '{lst.folder_key}' "
+                        f"not in account folders, skipping."
+                    )
+                    continue
+
+                try:
+                    uids = await imap.fetch_uids_older_than(
+                        folder, lst.cleanup_days
+                    )
+                except Exception:
+                    logger.exception(
+                        "Error fetching UIDs from %s for cleanup", folder
+                    )
+                    click.echo(f"  {list_name}: error accessing {folder}")
+                    continue
+
+                if not uids:
+                    click.echo(
+                        f"  {list_name} ({folder}): "
+                        f"no messages older than {lst.cleanup_days}d"
+                    )
+                    continue
+
+                if dry_run:
+                    click.echo(
+                        f"  {list_name} ({folder}): "
+                        f"would delete {len(uids)} message(s) "
+                        f"older than {lst.cleanup_days}d"
+                    )
+                else:
+                    await imap.delete(uids)
+                    click.echo(
+                        f"  {list_name} ({folder}): "
+                        f"deleted {len(uids)} message(s) "
+                        f"older than {lst.cleanup_days}d"
+                    )
+                    total_deleted += len(uids)
+
+    if dry_run:
+        click.echo("\nDry run complete. No messages were deleted.")
+    else:
+        click.echo(f"\nCleanup complete. Deleted {total_deleted} message(s).")
 
 
 @email.command("status")

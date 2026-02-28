@@ -3,6 +3,7 @@
 Uses Click's CliRunner so no real IMAP/Ollama connections are required.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +18,29 @@ from corvus.cli import cli
 @pytest.fixture
 def runner():
     return CliRunner()
+
+
+@pytest.fixture
+def sender_lists_path(tmp_path):
+    """Write sample sender lists to a temp file and return the path string."""
+    data = {
+        "lists": {
+            "white": {
+                "description": "Known humans.",
+                "action": "keep",
+                "addresses": ["alice@example.com"],
+            },
+            "black": {
+                "description": "Blacklisted.",
+                "action": "delete",
+                "addresses": ["spam@scammer.com"],
+            },
+        },
+        "priority": ["white", "black"],
+    }
+    path = tmp_path / "sender_lists.json"
+    path.write_text(json.dumps(data))
+    return str(path)
 
 
 SAMPLE_ACCOUNTS = [
@@ -145,3 +169,125 @@ class TestEmailReview:
 
         assert result.exit_code == 0
         assert "No pending" in result.output
+
+
+# --- corvus email lists ---
+
+
+class TestEmailLists:
+    def test_shows_lists(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "lists"])
+        assert result.exit_code == 0
+        assert "white" in result.output
+        assert "black" in result.output
+        assert "alice@example.com" in result.output
+        assert "spam@scammer.com" in result.output
+
+    def test_empty_lists(self, runner, tmp_path, monkeypatch):
+        path = str(tmp_path / "empty.json")
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", path)
+        result = runner.invoke(cli, ["email", "lists"])
+        assert result.exit_code == 0
+        assert "No sender lists configured" in result.output
+
+
+# --- corvus email list-add ---
+
+
+class TestEmailListAdd:
+    def test_add_to_list(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-add", "black", "evil@bad.com"])
+        assert result.exit_code == 0
+        assert "Added" in result.output
+        assert "evil@bad.com" in result.output
+
+        # Verify it was persisted
+        data = json.loads(open(sender_lists_path).read())
+        assert "evil@bad.com" in data["lists"]["black"]["addresses"]
+
+    def test_add_duplicate(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-add", "white", "alice@example.com"])
+        assert result.exit_code == 0
+        assert "already in" in result.output
+
+
+# --- corvus email list-remove ---
+
+
+class TestEmailListRemove:
+    def test_remove_from_list(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-remove", "white", "alice@example.com"])
+        assert result.exit_code == 0
+        assert "Removed" in result.output
+
+        # Verify it was persisted
+        data = json.loads(open(sender_lists_path).read())
+        assert "alice@example.com" not in data["lists"]["white"]["addresses"]
+
+    def test_remove_nonexistent(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-remove", "white", "nobody@x.com"])
+        assert result.exit_code == 0
+        assert "not found" in result.output
+
+
+# --- corvus email rationalize ---
+
+
+class TestEmailRationalize:
+    def test_clean_lists(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "rationalize"])
+        assert result.exit_code == 0
+        assert "clean" in result.output.lower() or "no changes" in result.output.lower()
+
+    def test_dedup(self, runner, tmp_path, monkeypatch):
+        data = {
+            "lists": {
+                "black": {
+                    "action": "delete",
+                    "addresses": ["dupe@spam.com", "DUPE@SPAM.COM"],
+                },
+            },
+            "priority": ["black"],
+        }
+        path = tmp_path / "sender_lists.json"
+        path.write_text(json.dumps(data))
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", str(path))
+
+        result = runner.invoke(cli, ["email", "rationalize"])
+        assert result.exit_code == 0
+        assert "1 change" in result.output
+        assert "duplicate" in result.output.lower()
+
+
+# --- corvus email cleanup ---
+
+
+class TestEmailCleanup:
+    def test_no_cleanup_lists(self, runner, tmp_path, monkeypatch):
+        """No lists with cleanup_days shows informative message."""
+        data = {
+            "lists": {
+                "white": {"action": "keep", "addresses": ["a@b.com"]},
+            },
+            "priority": ["white"],
+        }
+        path = tmp_path / "sender_lists.json"
+        path.write_text(json.dumps(data))
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", str(path))
+        monkeypatch.setattr("corvus.cli.load_email_accounts", lambda: SAMPLE_ACCOUNTS)
+
+        result = runner.invoke(cli, ["email", "cleanup"])
+        assert result.exit_code == 0
+        assert "No sender lists have cleanup_days" in result.output
+
+    def test_no_config_exits_with_error(self, runner, monkeypatch):
+        monkeypatch.setattr("corvus.cli.load_email_accounts", lambda: [])
+        result = runner.invoke(cli, ["email", "cleanup"])
+        assert result.exit_code != 0
+        assert "No email accounts configured" in result.output

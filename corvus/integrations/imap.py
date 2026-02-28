@@ -262,6 +262,28 @@ class ImapClient:
             return
         await self.flag(uids, "\\Seen", value=True)
 
+    async def fetch_uids_older_than(self, folder: str, days: int) -> list[str]:
+        """Fetch UIDs of messages older than N days (server-side IMAP BEFORE search).
+
+        Args:
+            folder: IMAP folder name.
+            days: Messages older than this many days from today.
+
+        Returns:
+            List of UID strings for matching messages.
+        """
+        from datetime import date, timedelta
+
+        cutoff = date.today() - timedelta(days=days)
+
+        def _fetch() -> list[str]:
+            self.mailbox.folder.set(folder)
+            criteria = AND(date_lt=cutoff)
+            msgs = self.mailbox.fetch(criteria, headers_only=True, mark_seen=False)
+            return [m.uid for m in msgs]
+
+        return await asyncio.to_thread(_fetch)
+
     # --- Folder management ---
 
     async def ensure_folders(self, folders: list[str]) -> None:

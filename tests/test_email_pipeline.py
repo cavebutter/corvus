@@ -90,6 +90,7 @@ _CLASSIFY_PATH = "corvus.executors.email_classifier.classify_email"
 _EXTRACT_PATH = "corvus.executors.email_extractor.extract_email_data"
 _EXTRACTABLE_PATH = "corvus.executors.email_extractor.EXTRACTABLE_CATEGORIES"
 _ROUTE_PATH = "corvus.router.email.route_email_action"
+_EXECUTE_PATH = "corvus.router.email.execute_email_action"
 _IMAP_PATH = "corvus.orchestrator.email_pipelines.ImapClient"
 
 
@@ -485,3 +486,387 @@ class TestRunEmailSummaryProcessing:
         mock_imap.fetch_messages.assert_awaited_once()
         call_args = mock_imap.fetch_messages.call_args
         assert call_args[0][0] == "INBOX"
+
+
+# --- Sender list integration tests ---
+
+
+def _write_sender_lists(tmp_path, data: dict) -> str:
+    """Write a sender_lists.json to tmp_path and return the path string."""
+    import json
+
+    path = tmp_path / "sender_lists.json"
+    path.write_text(json.dumps(data))
+    return str(path)
+
+
+class TestTriageSenderListBlacklist:
+    """Blacklisted senders skip LLM and are auto-deleted."""
+
+    async def test_blacklisted_sender_skips_llm(self, account_config, tmp_path):
+        blacklisted_email = _make_email(uid="1", from_addr="spam@scammer.com")
+        emails = [blacklisted_email]
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "black": {"action": "delete", "addresses": ["spam@scammer.com"]},
+            },
+            "priority": ["black"],
+        })
+
+        imap_patch, mock_imap = _patch_imap_client(messages=emails)
+        mock_classify = AsyncMock()
+        mock_execute = AsyncMock()
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=mock_classify),
+            patch(_EXECUTE_PATH, new=mock_execute),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            result = await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+                sender_lists_path=sender_lists_path,
+                force_queue=True,
+            )
+
+        # LLM should NOT have been called
+        mock_classify.assert_not_awaited()
+        # Action should have been executed
+        mock_execute.assert_awaited_once()
+        assert result.processed == 1
+        assert result.auto_acted == 1
+        assert result.queued == 0
+
+    async def test_blacklisted_sender_bypasses_force_queue(self, account_config, tmp_path):
+        """Sender list matches bypass force_queue — they're explicit user rules."""
+        emails = [_make_email(uid="1", from_addr="spam@scammer.com")]
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "black": {"action": "delete", "addresses": ["spam@scammer.com"]},
+            },
+            "priority": ["black"],
+        })
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+        mock_execute = AsyncMock()
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=AsyncMock()),
+            patch(_EXECUTE_PATH, new=mock_execute),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            result = await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+                sender_lists_path=sender_lists_path,
+                force_queue=True,  # Even with force_queue, sender list acts
+            )
+
+        assert result.auto_acted == 1
+        assert result.queued == 0
+
+
+class TestTriageSenderListVendor:
+    """Vendor senders skip LLM and are auto-moved."""
+
+    async def test_vendor_sender_auto_moved(self, account_config, tmp_path):
+        emails = [_make_email(uid="1", from_addr="deals@amazon.com")]
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "vendor": {
+                    "action": "move",
+                    "folder_key": "approved_ads",
+                    "cleanup_days": 14,
+                    "addresses": ["deals@amazon.com"],
+                },
+            },
+            "priority": ["vendor"],
+        })
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+        mock_classify = AsyncMock()
+        mock_execute = AsyncMock()
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=mock_classify),
+            patch(_EXECUTE_PATH, new=mock_execute),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            result = await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+                sender_lists_path=sender_lists_path,
+            )
+
+        mock_classify.assert_not_awaited()
+        mock_execute.assert_awaited_once()
+        assert result.auto_acted == 1
+
+
+class TestTriageSenderListWhitelist:
+    """Whitelisted senders still get classified but force KEEP + queue."""
+
+    async def test_whitelisted_sender_still_classified(self, account_config, tmp_path):
+        emails = [_make_email(uid="1", from_addr="alice@example.com")]
+        task = _make_triage_task(uid="1", category=EmailCategory.PERSONAL)
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "white": {"action": "keep", "addresses": ["alice@example.com"]},
+            },
+            "priority": ["white"],
+        })
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+        mock_classify = AsyncMock(return_value=(task, MagicMock()))
+        mock_route = AsyncMock(return_value=False)
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=mock_classify),
+            patch(_ROUTE_PATH, new=mock_route),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            result = await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+                sender_lists_path=sender_lists_path,
+                force_queue=True,
+            )
+
+        # LLM SHOULD have been called (white list still classifies)
+        mock_classify.assert_awaited_once()
+        assert result.processed == 1
+        assert result.queued == 1
+
+    async def test_whitelisted_sender_forces_keep(self, account_config, tmp_path):
+        """Even if LLM suggests DELETE, whitelist forces KEEP."""
+        emails = [_make_email(uid="1", from_addr="alice@example.com")]
+        task = _make_triage_task(
+            uid="1",
+            category=EmailCategory.SPAM,
+            action_type=EmailActionType.DELETE,
+        )
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "white": {"action": "keep", "addresses": ["alice@example.com"]},
+            },
+            "priority": ["white"],
+        })
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+        mock_classify = AsyncMock(return_value=(task, MagicMock()))
+        mock_route = AsyncMock(return_value=False)
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=mock_classify),
+            patch(_ROUTE_PATH, new=mock_route),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+                sender_lists_path=sender_lists_path,
+            )
+
+        # Verify the task passed to route has KEEP action
+        routed_task = mock_route.call_args.args[0]
+        assert routed_task.proposed_action.action_type == EmailActionType.KEEP
+        assert routed_task.sender_list == "white"
+
+
+class TestTriageNoSenderLists:
+    """Without sender_lists_path, triage works as before."""
+
+    async def test_no_sender_lists_falls_through(self, account_config, tmp_path):
+        emails = [_make_email(uid="1")]
+        task = _make_triage_task(uid="1")
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+
+        with (
+            imap_patch,
+            patch(
+                _CLASSIFY_PATH,
+                new=AsyncMock(return_value=(task, MagicMock())),
+            ),
+            patch(
+                _ROUTE_PATH,
+                new=AsyncMock(return_value=False),
+            ),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            result = await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+                # No sender_lists_path
+            )
+
+        assert result.processed == 1
+
+
+class TestSummarySenderListWhitelist:
+    """Whitelisted senders always appear in important_subjects and get extraction."""
+
+    async def test_whitelisted_sender_in_important_subjects(self, account_config, tmp_path):
+        """Whitelisted sender always added to important_subjects, even if category is OTHER."""
+        emails = [_make_email(uid="1", from_addr="alice@example.com")]
+        # Category OTHER would normally NOT be in important_subjects
+        task = _make_triage_task(uid="1", category=EmailCategory.OTHER)
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "white": {"action": "keep", "addresses": ["alice@example.com"]},
+            },
+            "priority": ["white"],
+        })
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+        mock_ollama = AsyncMock()
+        mock_ollama.chat = AsyncMock(return_value=("Summary.", MagicMock()))
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=AsyncMock(return_value=(task, MagicMock()))),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            result = await run_email_summary(
+                account_config=account_config,
+                ollama=mock_ollama,
+                model="test-model",
+                sender_lists_path=sender_lists_path,
+            )
+
+        assert len(result.important_subjects) == 1
+        assert result.important_subjects[0] == "Test Email"
+
+    async def test_whitelisted_sender_gets_extraction(self, account_config, tmp_path):
+        """Whitelisted sender always triggers extraction, even if category isn't extractable."""
+        emails = [_make_email(uid="1", from_addr="alice@example.com")]
+        task = _make_triage_task(uid="1", category=EmailCategory.OTHER)
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "white": {"action": "keep", "addresses": ["alice@example.com"]},
+            },
+            "priority": ["white"],
+        })
+
+        extraction = EmailExtractionResult(
+            action_items=[ActionItem(description="Call Alice back")],
+        )
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+        mock_ollama = AsyncMock()
+        mock_ollama.chat = AsyncMock(return_value=("Summary.", MagicMock()))
+        mock_extract = AsyncMock(return_value=(extraction, MagicMock()))
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=AsyncMock(return_value=(task, MagicMock()))),
+            patch(_EXTRACT_PATH, new=mock_extract),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),  # empty — normally no extraction
+        ):
+            result = await run_email_summary(
+                account_config=account_config,
+                ollama=mock_ollama,
+                model="test-model",
+                sender_lists_path=sender_lists_path,
+            )
+
+        mock_extract.assert_awaited_once()
+        assert len(result.action_items) == 1
+        assert result.action_items[0].description == "Call Alice back"
+
+    async def test_no_sender_lists_summary_unchanged(self, account_config):
+        """Without sender_lists_path, summary behaves as before."""
+        emails = [_make_email(uid="1")]
+        task = _make_triage_task(uid="1", category=EmailCategory.OTHER)
+
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+        mock_ollama = AsyncMock()
+        mock_ollama.chat = AsyncMock(return_value=("Summary.", MagicMock()))
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=AsyncMock(return_value=(task, MagicMock()))),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            result = await run_email_summary(
+                account_config=account_config,
+                ollama=mock_ollama,
+                model="test-model",
+                # No sender_lists_path
+            )
+
+        # OTHER category should NOT be in important_subjects
+        assert len(result.important_subjects) == 0
+
+
+class TestTriageSenderListAudit:
+    """Sender list actions are logged with sender_list_applied audit action."""
+
+    async def test_sender_list_audit_entry(self, account_config, tmp_path):
+        from corvus.schemas.email import EmailAuditEntry
+
+        emails = [_make_email(uid="1", from_addr="spam@scammer.com")]
+
+        sender_lists_path = _write_sender_lists(tmp_path, {
+            "lists": {
+                "black": {"action": "delete", "addresses": ["spam@scammer.com"]},
+            },
+            "priority": ["black"],
+        })
+
+        audit_path = str(tmp_path / "audit.jsonl")
+        imap_patch, _mock = _patch_imap_client(messages=emails)
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=AsyncMock()),
+            patch(_EXECUTE_PATH, new=AsyncMock()),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+        ):
+            await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=audit_path,
+                sender_lists_path=sender_lists_path,
+            )
+
+        # Read the audit log and verify the entry
+        from corvus.audit.email_logger import EmailAuditLog
+
+        audit_log = EmailAuditLog(audit_path)
+        entries = audit_log.read_entries()
+        assert len(entries) == 1
+        assert entries[0].action == "sender_list_applied"
+        assert entries[0].applied is True

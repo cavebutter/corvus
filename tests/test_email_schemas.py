@@ -181,14 +181,14 @@ class TestEmailMessage:
 class TestEmailCategory:
     def test_all_expected_values(self):
         expected = {
-            "spam", "newsletter", "receipt", "invoice", "package_notice",
-            "action_required", "personal", "important", "other",
+            "spam", "newsletter", "job_alert", "receipt", "invoice",
+            "package_notice", "action_required", "personal", "important", "other",
         }
         actual = {c.value for c in EmailCategory}
         assert actual == expected
 
     def test_count(self):
-        assert len(EmailCategory) == 9
+        assert len(EmailCategory) == 10
 
 
 # --- EmailClassification ---

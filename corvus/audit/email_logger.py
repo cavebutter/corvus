@@ -64,6 +64,12 @@ class EmailAuditLog:
         self.log(entry)
         return entry
 
+    def log_sender_list_applied(self, task: EmailTriageTask) -> EmailAuditEntry:
+        """Log an action applied via sender list (deterministic, no LLM)."""
+        entry = self._build_entry("sender_list_applied", task, applied=True)
+        self.log(entry)
+        return entry
+
     def read_entries(
         self,
         *,
