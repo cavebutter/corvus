@@ -126,6 +126,18 @@ async def dispatch(
             on_progress=on_progress,
         )
 
+    if intent == Intent.EMAIL_TRIAGE:
+        return await _dispatch_email_triage(
+            classification, ollama=ollama, model=model,
+            keep_alive=keep_alive, on_progress=on_progress,
+        )
+
+    if intent == Intent.EMAIL_SUMMARY:
+        return await _dispatch_email_summary(
+            classification, ollama=ollama, model=model,
+            keep_alive=keep_alive, on_progress=on_progress,
+        )
+
     if intent == Intent.GENERAL_CHAT:
         return await _dispatch_chat(
             user_input, ollama=ollama, model=effective_chat_model,
@@ -321,3 +333,103 @@ async def _dispatch_chat(
         confidence=confidence,
         message=text,
     )
+
+
+async def _dispatch_email_triage(
+    classification: IntentClassification,
+    *,
+    ollama: OllamaClient,
+    model: str,
+    keep_alive: str,
+    on_progress: Callable[[str], None] | None,
+) -> OrchestratorResponse:
+    from corvus.config import EMAIL_AUDIT_LOG_PATH, EMAIL_BATCH_SIZE, EMAIL_REVIEW_DB_PATH
+    from corvus.orchestrator.email_pipelines import run_email_triage
+    from corvus.schemas.email import EmailAccountConfig
+
+    accounts = _load_email_accounts(classification.email_account)
+    if not accounts:
+        return OrchestratorResponse(
+            action=OrchestratorAction.NEEDS_CLARIFICATION,
+            intent=Intent.EMAIL_TRIAGE,
+            confidence=classification.confidence,
+            message="No email accounts configured.",
+            clarification_prompt=(
+                "Set up email accounts in secrets/email_accounts.json."
+            ),
+        )
+
+    # Process first matching account
+    account = accounts[0]
+    config = EmailAccountConfig(**account)
+
+    result = await run_email_triage(
+        account_config=config,
+        ollama=ollama,
+        model=model,
+        keep_alive=keep_alive,
+        limit=EMAIL_BATCH_SIZE,
+        force_queue=True,
+        review_db_path=EMAIL_REVIEW_DB_PATH,
+        audit_log_path=EMAIL_AUDIT_LOG_PATH,
+        on_progress=on_progress,
+    )
+
+    return OrchestratorResponse(
+        action=OrchestratorAction.DISPATCHED,
+        intent=Intent.EMAIL_TRIAGE,
+        confidence=classification.confidence,
+        result=result,
+    )
+
+
+async def _dispatch_email_summary(
+    classification: IntentClassification,
+    *,
+    ollama: OllamaClient,
+    model: str,
+    keep_alive: str,
+    on_progress: Callable[[str], None] | None,
+) -> OrchestratorResponse:
+    from corvus.orchestrator.email_pipelines import run_email_summary
+    from corvus.schemas.email import EmailAccountConfig
+
+    accounts = _load_email_accounts(classification.email_account)
+    if not accounts:
+        return OrchestratorResponse(
+            action=OrchestratorAction.NEEDS_CLARIFICATION,
+            intent=Intent.EMAIL_SUMMARY,
+            confidence=classification.confidence,
+            message="No email accounts configured.",
+            clarification_prompt=(
+                "Set up email accounts in secrets/email_accounts.json."
+            ),
+        )
+
+    account = accounts[0]
+    config = EmailAccountConfig(**account)
+
+    result = await run_email_summary(
+        account_config=config,
+        ollama=ollama,
+        model=model,
+        keep_alive=keep_alive,
+        on_progress=on_progress,
+    )
+
+    return OrchestratorResponse(
+        action=OrchestratorAction.DISPATCHED,
+        intent=Intent.EMAIL_SUMMARY,
+        confidence=classification.confidence,
+        result=result,
+    )
+
+
+def _load_email_accounts(email_filter: str | None = None) -> list[dict]:
+    """Load email accounts, optionally filtered by email address."""
+    from corvus.config import load_email_accounts
+
+    accounts = load_email_accounts()
+    if email_filter and accounts:
+        accounts = [a for a in accounts if a.get("email") == email_filter]
+    return accounts

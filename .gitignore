@@ -1,6 +1,7 @@
 # Secrets — never commit plaintext
 secrets/*.env
 secrets/*.env.bak
+secrets/email_accounts.json
 .env
 .env.*
 # Encrypted secrets ARE safe to commit
@@ -23,6 +24,9 @@ build/
 
 # Data (runtime artifacts)
 data/
+
+# Tools (cloned third-party repos)
+tools/
 
 # OS
 .DS_Store

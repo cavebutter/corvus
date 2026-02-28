@@ -1,15 +1,20 @@
 """CLI entry point for the Corvus document management system.
 
 Commands:
-    corvus tag      — batch-tag documents via LLM
-    corvus review   — interactively review pending items
-    corvus digest   — show activity digest
-    corvus status   — quick overview of queue and recent activity
-    corvus watch    — watch a scan folder and transfer files to Paperless
-    corvus fetch    — retrieve a document via natural language
-    corvus ask      — single natural language query to the orchestrator
-    corvus chat     — interactive REPL with the orchestrator
-    corvus voice    — voice assistant (wake word, STT, TTS)
+    corvus tag             — batch-tag documents via LLM
+    corvus review          — interactively review pending items
+    corvus digest          — show activity digest
+    corvus status          — quick overview of queue and recent activity
+    corvus watch           — watch a scan folder and transfer files to Paperless
+    corvus fetch           — retrieve a document via natural language
+    corvus ask             — single natural language query to the orchestrator
+    corvus chat            — interactive REPL with the orchestrator
+    corvus voice           — voice assistant (wake word, STT, TTS)
+    corvus email triage    — classify and triage unread emails
+    corvus email review    — review queued email actions
+    corvus email summary   — summarize unread emails
+    corvus email status    — show email pipeline statistics
+    corvus email accounts  — list configured email accounts
 """
 
 import asyncio
@@ -23,6 +28,9 @@ from corvus.config import (
     AUDIT_LOG_PATH,
     CHAT_MODEL,
     CONVERSATION_DB_PATH,
+    EMAIL_AUDIT_LOG_PATH,
+    EMAIL_BATCH_SIZE,
+    EMAIL_REVIEW_DB_PATH,
     OLLAMA_BASE_URL,
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
@@ -44,6 +52,7 @@ from corvus.config import (
     WATCHDOG_HASH_DB_PATH,
     WATCHDOG_SCAN_DIR,
     WATCHDOG_TRANSFER_METHOD,
+    load_email_accounts,
 )
 
 logger = logging.getLogger("corvus")
@@ -1103,3 +1112,303 @@ async def _voice_async(
                 click.echo("\nGoodbye.")
     finally:
         store.close()
+
+
+# ------------------------------------------------------------------
+# corvus email (command group)
+# ------------------------------------------------------------------
+
+
+def _validate_email_config() -> list[dict]:
+    """Load and validate email account configs. Exits on failure."""
+    accounts = load_email_accounts()
+    if not accounts:
+        click.echo(
+            "Error: No email accounts configured.\n"
+            "Create secrets/email_accounts.json with your account settings.",
+            err=True,
+        )
+        sys.exit(1)
+    return accounts
+
+
+def _find_email_account(accounts: list[dict], email_filter: str | None) -> list[dict]:
+    """Filter accounts by email address, or return all."""
+    if email_filter:
+        matched = [a for a in accounts if a.get("email") == email_filter]
+        if not matched:
+            click.echo(f"Error: No account found matching '{email_filter}'.", err=True)
+            click.echo("Configured accounts:")
+            for a in accounts:
+                click.echo(f"  - {a.get('email')} ({a.get('name', '?')})")
+            sys.exit(1)
+        return matched
+    return accounts
+
+
+@cli.group()
+def email() -> None:
+    """Email inbox management."""
+
+
+@email.command()
+@click.option("--account", "-a", default=None, help="Account email (default: all).")
+@click.option("--limit", "-n", default=None, type=int, help="Max emails to process.")
+@click.option("--model", "-m", default=None, help="Ollama model name (auto-detected if omitted).")
+@click.option("--keep-alive", default="5m", show_default=True, help="Ollama keep_alive duration.")
+@click.option("--apply", "apply_actions", is_flag=True, help="Apply actions (skip review queue).")
+def triage(
+    account: str | None,
+    limit: int | None,
+    model: str | None,
+    keep_alive: str,
+    apply_actions: bool,
+) -> None:
+    """Classify and triage unread emails."""
+    accounts = _validate_email_config()
+    targets = _find_email_account(accounts, account)
+    asyncio.run(_email_triage_async(targets, limit, model, keep_alive, apply_actions))
+
+
+async def _email_triage_async(
+    accounts: list[dict],
+    limit: int | None,
+    model: str | None,
+    keep_alive: str,
+    apply_actions: bool,
+) -> None:
+    from corvus.integrations.ollama import OllamaClient
+    from corvus.orchestrator.email_pipelines import run_email_triage
+    from corvus.schemas.email import EmailAccountConfig
+
+    async with OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama:
+        resolved_model = await _resolve_model(ollama, model)
+
+        for account_dict in accounts:
+            config = EmailAccountConfig(**account_dict)
+            click.echo(f"\n{'='*60}")
+            click.echo(f"Account: {config.name} ({config.email})")
+            click.echo(f"{'='*60}")
+
+            result = await run_email_triage(
+                account_config=config,
+                ollama=ollama,
+                model=resolved_model,
+                keep_alive=keep_alive,
+                limit=limit or EMAIL_BATCH_SIZE,
+                force_queue=not apply_actions,
+                review_db_path=EMAIL_REVIEW_DB_PATH,
+                audit_log_path=EMAIL_AUDIT_LOG_PATH,
+                on_progress=click.echo,
+            )
+
+            click.echo(f"\nResults for {config.email}:")
+            click.echo(f"  Processed: {result.processed}")
+            click.echo(f"  Auto-acted: {result.auto_acted}")
+            click.echo(f"  Queued for review: {result.queued}")
+            click.echo(f"  Errors: {result.errors}")
+            if result.categories:
+                click.echo("  Categories:")
+                for cat, count in sorted(result.categories.items()):
+                    click.echo(f"    {cat}: {count}")
+
+
+@email.command("review")
+def email_review() -> None:
+    """Review queued email actions."""
+    asyncio.run(_email_review_async())
+
+
+async def _email_review_async() -> None:
+    from corvus.audit.email_logger import EmailAuditLog
+    from corvus.integrations.imap import ImapClient
+    from corvus.queue.email_review import EmailReviewQueue
+    from corvus.router.email import execute_email_action
+    from corvus.schemas.email import EmailAccountConfig
+
+    audit_log = EmailAuditLog(EMAIL_AUDIT_LOG_PATH)
+
+    with EmailReviewQueue(EMAIL_REVIEW_DB_PATH) as review_queue:
+        pending = review_queue.list_pending()
+        if not pending:
+            click.echo("No pending email actions to review.")
+            return
+
+        click.echo(f"Found {len(pending)} pending email action(s).\n")
+
+        approved = 0
+        rejected = 0
+        skipped = 0
+
+        # Group by account for IMAP connections
+        accounts_cache: dict[str, EmailAccountConfig] = {}
+        all_accounts = load_email_accounts()
+        for a in all_accounts:
+            accounts_cache[a["email"]] = EmailAccountConfig(**a)
+
+        for i, item in enumerate(pending, 1):
+            task = item.task
+            click.echo(f"--- [{i}/{len(pending)}] Email from {task.from_address} ---")
+            click.echo(f"  Subject: {task.subject}")
+            click.echo(f"  Account: {task.account_email}")
+            click.echo(f"  Category: {task.classification.category.value}")
+            click.echo(f"  Confidence: {task.overall_confidence:.0%}")
+            click.echo(f"  Proposed: {task.proposed_action.action_type.value}")
+            if task.proposed_action.target_folder:
+                click.echo(f"  Target folder: {task.proposed_action.target_folder}")
+            if task.classification.summary:
+                click.echo(f"  Summary: {task.classification.summary}")
+            click.echo(f"  Reasoning: {task.classification.reasoning}")
+
+            choice = click.prompt(
+                "  Action",
+                type=click.Choice(["a", "r", "s", "q"], case_sensitive=False),
+                prompt_suffix=" [a]pprove / [r]eject / [s]kip / [q]uit: ",
+            )
+
+            if choice == "a":
+                account_config = accounts_cache.get(task.account_email)
+                if not account_config:
+                    click.echo(
+                        f"  -> ERROR: Account {task.account_email} not found in config.",
+                        err=True,
+                    )
+                    continue
+
+                try:
+                    async with ImapClient(account_config) as imap:
+                        await execute_email_action(task, imap=imap)
+                    review_queue.approve(item.id, notes="Approved via CLI")
+                    audit_log.log_review_approved(task)
+                    click.echo("  -> Approved and applied.")
+                    approved += 1
+                except Exception:
+                    logger.exception("Error applying email action for %s", task.uid)
+                    click.echo(
+                        "  -> ERROR: Failed to apply. Item remains pending.",
+                        err=True,
+                    )
+            elif choice == "r":
+                notes = click.prompt(
+                    "  Rejection notes (optional)",
+                    default="",
+                    show_default=False,
+                )
+                review_queue.reject(item.id, notes=notes or None)
+                audit_log.log_review_rejected(task)
+                click.echo("  -> Rejected.")
+                rejected += 1
+            elif choice == "s":
+                click.echo("  -> Skipped.")
+                skipped += 1
+            elif choice == "q":
+                click.echo("  -> Quitting review.")
+                break
+
+        click.echo(
+            f"\nReview complete. Approved: {approved}, "
+            f"Rejected: {rejected}, Skipped: {skipped}"
+        )
+
+
+@email.command("summary")
+@click.option("--account", "-a", default=None, help="Account email (default: all).")
+@click.option("--model", "-m", default=None, help="Ollama model name.")
+@click.option("--keep-alive", default="5m", show_default=True, help="Ollama keep_alive duration.")
+def email_summary(account: str | None, model: str | None, keep_alive: str) -> None:
+    """Summarize unread emails."""
+    accounts = _validate_email_config()
+    targets = _find_email_account(accounts, account)
+    asyncio.run(_email_summary_async(targets, model, keep_alive))
+
+
+async def _email_summary_async(
+    accounts: list[dict],
+    model: str | None,
+    keep_alive: str,
+) -> None:
+    from corvus.integrations.ollama import OllamaClient
+    from corvus.orchestrator.email_pipelines import run_email_summary
+    from corvus.schemas.email import EmailAccountConfig
+
+    async with OllamaClient(OLLAMA_BASE_URL, default_keep_alive=keep_alive) as ollama:
+        resolved_model = await _resolve_model(ollama, model)
+
+        for account_dict in accounts:
+            config = EmailAccountConfig(**account_dict)
+            click.echo(f"\n{'='*60}")
+            click.echo(f"Account: {config.name} ({config.email})")
+            click.echo(f"{'='*60}")
+
+            result = await run_email_summary(
+                account_config=config,
+                ollama=ollama,
+                model=resolved_model,
+                keep_alive=keep_alive,
+                on_progress=click.echo,
+            )
+
+            click.echo(f"\nInbox Summary ({result.total_unread} unread):")
+            click.echo(result.summary)
+
+            if result.by_category:
+                click.echo("\nBy category:")
+                for cat, count in sorted(result.by_category.items()):
+                    click.echo(f"  {cat}: {count}")
+
+            if result.important_subjects:
+                click.echo("\nImportant:")
+                for subj in result.important_subjects:
+                    click.echo(f"  - {subj}")
+
+            if result.action_items:
+                click.echo("\nAction items:")
+                for ai in result.action_items:
+                    deadline = f" (by {ai.deadline})" if ai.deadline else ""
+                    click.echo(f"  - {ai.description}{deadline}")
+
+
+@email.command("status")
+def email_status() -> None:
+    """Show email pipeline statistics."""
+    from datetime import UTC, datetime, timedelta
+
+    from corvus.audit.email_logger import EmailAuditLog
+    from corvus.queue.email_review import EmailReviewQueue
+
+    audit_log = EmailAuditLog(EMAIL_AUDIT_LOG_PATH)
+    with EmailReviewQueue(EMAIL_REVIEW_DB_PATH) as review_queue:
+        pending_count = review_queue.count_pending()
+
+    since = datetime.now(UTC) - timedelta(hours=24)
+    entries = audit_log.read_entries(since=since)
+
+    auto_applied = sum(1 for e in entries if e.action == "auto_applied")
+    queued = sum(1 for e in entries if e.action == "queued_for_review")
+    approved = sum(1 for e in entries if e.action == "review_approved")
+    rejected = sum(1 for e in entries if e.action == "review_rejected")
+
+    click.echo("Email Pipeline Status (last 24h)")
+    click.echo(f"  Pending review:  {pending_count}")
+    click.echo(f"  Auto-applied:    {auto_applied}")
+    click.echo(f"  Queued:          {queued}")
+    click.echo(f"  Approved:        {approved}")
+    click.echo(f"  Rejected:        {rejected}")
+
+
+@email.command("accounts")
+def email_accounts() -> None:
+    """List configured email accounts."""
+    accounts = load_email_accounts()
+    if not accounts:
+        click.echo("No email accounts configured.")
+        click.echo("Create secrets/email_accounts.json with your account settings.")
+        return
+
+    click.echo(f"Configured email accounts ({len(accounts)}):")
+    for a in accounts:
+        gmail_tag = " [Gmail]" if a.get("is_gmail") else ""
+        click.echo(f"  - {a.get('name', '?')} ({a.get('email', '?')}){gmail_tag}")
+        folders = a.get("folders", {})
+        if folders:
+            click.echo(f"    Folders: {', '.join(f'{k}={v}' for k, v in folders.items())}")

@@ -50,7 +50,17 @@ fetch_delivery_method ("browser" or "download", optional)
 "who won the Super Bowl", "search for best NAS setup"
    Params: search_query (str, required — preserve the user's query language)
 
-8. **general_chat** — Anything else: greetings, questions, conversation.
+8. **email_triage** — User wants to process/clean/triage their email inbox.
+   Examples: "check my email", "clean up my inbox", "process my gmail", \
+"triage my emails", "sort my mail"
+   Params: email_account (str, optional — specific account email or None for all)
+
+9. **email_summary** — User wants a summary of their emails.
+   Examples: "summarize my inbox", "any important emails?", "what's in my email?", \
+"email summary", "what emails do I have?"
+   Params: email_account (str, optional — specific account email or None for all)
+
+10. **general_chat** — Anything else: greetings, questions, conversation.
    Examples: "hello", "what can you do?", "tell me a joke"
    No params.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from corvus.schemas.email import EmailSummaryResult, EmailTriageResult
 from corvus.schemas.orchestrator import (
     FetchPipelineResult,
     OrchestratorAction,
@@ -149,6 +150,16 @@ def summarize_response(response: OrchestratorResponse) -> str:
         )
 
     if isinstance(result, WebSearchResult):
+        return result.summary
+
+    if isinstance(result, EmailTriageResult):
+        r = result
+        return (
+            f"Processed {r.processed} emails. "
+            f"{r.auto_acted} auto-applied, {r.queued} queued for review."
+        )
+
+    if isinstance(result, EmailSummaryResult):
         return result.summary
 
     return response.message or "Done."

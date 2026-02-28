@@ -1,17 +1,24 @@
-"""Daily digest generation for the document tagging pipeline.
+"""Daily digest generation for the document tagging and email pipelines.
 
 Reads audit log entries and review queue state, produces a structured
 summary that can be rendered to text (and later to email, HTML, etc.).
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from corvus.audit.logger import AuditLog
 from corvus.queue.review import ReviewQueue
 from corvus.schemas.document_tagging import AuditEntry, GateAction
+
+if TYPE_CHECKING:
+    from corvus.audit.email_logger import EmailAuditLog
+    from corvus.queue.email_review import EmailReviewQueue
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,14 @@ class DailyDigest(BaseModel):
     review_approved: list[DigestItem] = Field(default_factory=list)
     review_rejected: list[DigestItem] = Field(default_factory=list)
     pending_review_count: int = 0
+
+    # Email stats
+    email_processed: int = 0
+    email_auto_applied: int = 0
+    email_queued: int = 0
+    email_approved: int = 0
+    email_rejected: int = 0
+    email_pending_review: int = 0
 
     @property
     def total_processed(self) -> int:
@@ -73,6 +88,8 @@ def generate_digest(
     audit_log: AuditLog,
     review_queue: ReviewQueue,
     *,
+    email_audit_log: EmailAuditLog | None = None,
+    email_review_queue: EmailReviewQueue | None = None,
     since: datetime | None = None,
     hours: int = 24,
 ) -> DailyDigest:
@@ -81,6 +98,8 @@ def generate_digest(
     Args:
         audit_log: The audit log to read entries from.
         review_queue: The review queue to check pending count.
+        email_audit_log: Optional email audit log for email stats.
+        email_review_queue: Optional email review queue for pending count.
         since: Start of the digest period. Defaults to `hours` ago.
         hours: Fallback period in hours if `since` is not provided.
 
@@ -114,6 +133,30 @@ def generate_digest(
 
     pending_count = review_queue.count_pending()
 
+    # Email stats
+    email_processed = 0
+    email_auto = 0
+    email_queued = 0
+    email_approved_count = 0
+    email_rejected_count = 0
+    email_pending = 0
+
+    if email_audit_log is not None:
+        email_entries = email_audit_log.read_entries(since=period_start)
+        email_processed = len(email_entries)
+        for e_entry in email_entries:
+            if e_entry.action == "auto_applied":
+                email_auto += 1
+            elif e_entry.action == "queued_for_review":
+                email_queued += 1
+            elif e_entry.action == "review_approved":
+                email_approved_count += 1
+            elif e_entry.action == "review_rejected":
+                email_rejected_count += 1
+
+    if email_review_queue is not None:
+        email_pending = email_review_queue.count_pending()
+
     digest = DailyDigest(
         generated_at=now,
         period_start=period_start,
@@ -124,6 +167,12 @@ def generate_digest(
         review_approved=approved,
         review_rejected=rejected,
         pending_review_count=pending_count,
+        email_processed=email_processed,
+        email_auto_applied=email_auto,
+        email_queued=email_queued,
+        email_approved=email_approved_count,
+        email_rejected=email_rejected_count,
+        email_pending_review=email_pending,
     )
 
     logger.info(
@@ -186,7 +235,20 @@ def render_text(digest: DailyDigest) -> str:
             _append_item(lines, item)
         lines.append("")
 
-    if digest.total_processed == 0 and digest.total_reviewed == 0:
+    # Email section
+    if digest.email_processed > 0 or digest.email_pending_review > 0:
+        lines.append("## Email Pipeline")
+        lines.append(f"- Processed: {digest.email_processed}")
+        lines.append(f"- Auto-applied: {digest.email_auto_applied}")
+        lines.append(f"- Queued for review: {digest.email_queued}")
+        lines.append(f"- Approved: {digest.email_approved}")
+        lines.append(f"- Rejected: {digest.email_rejected}")
+        lines.append(f"- Pending review: {digest.email_pending_review}")
+        lines.append("")
+
+    has_doc_activity = digest.total_processed > 0 or digest.total_reviewed > 0
+    has_email_activity = digest.email_processed > 0 or digest.email_pending_review > 0
+    if not has_doc_activity and not has_email_activity:
         lines.append("No activity during this period.")
         lines.append("")
 

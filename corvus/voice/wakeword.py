@@ -38,22 +38,42 @@ class WakeWordDetector:
         self._threshold = threshold
         self._model = None
         self._enabled = False
+        self._keyword: str = ""
 
     async def __aenter__(self) -> WakeWordDetector:
-        if not self._model_path or not Path(self._model_path).exists():
+        if not self._model_path:
+            logger.warning("No wake word model specified — detector disabled")
+            self._enabled = False
+            return self
+
+        # Determine if this is a file path or a pre-trained model name.
+        # Names like "hey_jarvis" have no path separators and no extension.
+        model_ref = self._model_path
+        path = Path(model_ref)
+        is_file_path = path.suffix or "/" in model_ref or "\\" in model_ref
+
+        if is_file_path and not path.exists():
             logger.warning(
                 "Wake word model not found at '%s' — detector disabled",
-                self._model_path,
+                model_ref,
             )
             self._enabled = False
             return self
 
         from openwakeword import Model
 
-        logger.info("Loading wake word model: %s", self._model_path)
-        self._model = Model(wakeword_models=[self._model_path])
+        logger.info("Loading wake word model: %s", model_ref)
+        self._model = Model(wakeword_models=[model_ref])
         self._enabled = True
-        logger.info("Wake word detector ready (threshold=%.2f)", self._threshold)
+        try:
+            self._keyword = next(iter(self._model.models.keys()))
+        except (StopIteration, AttributeError):
+            self._keyword = model_ref
+        logger.info(
+            "Wake word detector ready — keyword=%r, threshold=%.2f",
+            self._keyword,
+            self._threshold,
+        )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:

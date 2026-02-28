@@ -145,6 +145,8 @@ class TestAudioPlayer:
             with patch.dict("sys.modules", {"sounddevice": mock_sd}):
                 mock_sd.play = MagicMock()
                 mock_sd.wait = MagicMock()
+                mock_sd.default.device = (0, 1)
+                mock_sd.query_devices.return_value = {"default_samplerate": 24000}
 
                 await player.play(audio, 24000)
 

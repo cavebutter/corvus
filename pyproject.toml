@@ -15,6 +15,7 @@ dependencies = [
     "watchdog>=6.0",
     "ddgs>=9.0",
     "trafilatura>=1.6",
+    "imap-tools>=1.7",
 ]
 
 [project.scripts]
@@ -31,7 +32,7 @@ voice = [
     "kokoro>=0.9",
     "sounddevice>=0.5",
     "soundfile>=0.12",
-    "openwakeword>=0.6",
+    "openwakeword @ git+https://github.com/dscripka/openWakeWord.git@main",
     "numpy>=1.26",
 ]
 

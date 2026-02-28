@@ -13,6 +13,7 @@ from corvus.orchestrator.conversation_store import ConversationStore
 from corvus.orchestrator.history import ConversationHistory, summarize_response
 from corvus.orchestrator.router import dispatch
 from corvus.planner.intent_classifier import classify_intent
+from corvus.schemas.email import EmailSummaryResult, EmailTriageResult
 from corvus.schemas.orchestrator import OrchestratorAction
 from corvus.schemas.voice import AudioConfig, VoiceState
 from corvus.voice.audio import AudioCapture, AudioPlayer, generate_ack_tone
@@ -268,6 +269,17 @@ def _response_to_speech(response) -> str:
 
     if response.action == OrchestratorAction.INTERACTIVE_REQUIRED:
         return "That requires the terminal. Please use the Corvus CLI."
+
+    # Specific handling for email results before generic DISPATCHED
+    if response.result is not None:
+        if isinstance(response.result, EmailTriageResult):
+            r = response.result
+            return (
+                f"Processed {r.processed} emails. "
+                f"{r.auto_acted} auto-applied, {r.queued} queued for review."
+            )
+        if isinstance(response.result, EmailSummaryResult):
+            return response.result.summary
 
     if response.action == OrchestratorAction.DISPATCHED:
         return summarize_response(response)

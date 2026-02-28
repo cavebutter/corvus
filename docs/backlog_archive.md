@@ -167,3 +167,63 @@
 - [x] **S12.5** CLI wiring — `--new`, `--list`, `--resume <id>` on chat; default resumes most recent; deferred conversation creation on first message; `_list_conversations()` helper
 - [x] **S12.6** Tests — 26 store tests, 6 history persistence tests, 6 CLI tests (38 new, 358 total pass)
 - [x] **S12.7** Smoke test — `--list` (empty + populated), `--new` (creates on first msg, not on quit), default resume, `--resume <prefix>`, `--resume bad-id` error, web search in persisted session, message counts update correctly
+
+---
+
+## Epic 13: Voice Engine Foundation
+
+**Goal:** Build the core audio, STT, TTS, and wake word detection modules for voice I/O. All modules are async-ready with `asyncio.to_thread()` bridges for sync libraries.
+
+- [x] **S13.1** Dependencies, config, schemas, and package init
+- [x] **S13.2** Audio I/O module (`corvus/voice/audio.py`)
+- [x] **S13.3** STT module (`corvus/voice/stt.py`)
+- [x] **S13.4** TTS module (`corvus/voice/tts.py`)
+- [x] **S13.5** Wake word module (`corvus/voice/wakeword.py`)
+- [x] **S13.6** Tests for engine components (52 tests)
+
+---
+
+## Epic 14: Local Voice Assistant
+
+**Goal:** Wire up the voice engine into a full assistant pipeline (wake word → STT → orchestrator → TTS → playback) with a CLI command.
+
+- [x] **S14.1** Voice pipeline orchestration (`corvus/voice/pipeline.py`)
+- [x] **S14.2** CLI command `corvus voice`
+- [x] **S14.3** Pipeline and CLI tests (23 tests)
+- [x] **S14.4** Smoke test on hardware (TTS, STT, full loop verified)
+
+---
+
+## Epic 16: Email Engine Foundation (Phase 3)
+
+**Goal:** Build core email infrastructure — IMAP client, LLM classification/extraction executors, and all Pydantic schemas for the email triage pipeline.
+
+- [x] **S16.1** Dependencies, config, schemas — added `imap-tools>=1.7` to pyproject.toml, EMAIL_* config vars to `corvus/config.py`, created `corvus/schemas/email.py` with 16 models/enums (EmailAccountConfig, EmailEnvelope, EmailMessage, EmailCategory, EmailClassification, EmailAction, EmailTriageTask, InvoiceData, ActionItem, EmailExtractionResult, EmailTriageResult, EmailSummaryResult, EmailReviewQueueItem, EmailAuditEntry)
+- [x] **S16.2** IMAP client (`corvus/integrations/imap.py`) — async wrapper around imap-tools using `asyncio.to_thread()`, Gmail COPY+DELETE move support via `is_gmail` flag, folder auto-creation, fetch envelopes (headers-only) and full messages
+- [x] **S16.3** Email classifier executor (`corvus/executors/email_classifier.py`) — LLM classification into 9 categories with confidence scoring, category→action mapping (SPAM→DELETE, RECEIPT→MOVE receipts, etc.), confidence gate thresholds (0.9/0.7)
+- [x] **S16.4** Email extractor executor (`corvus/executors/email_extractor.py`) — LLM extraction for RECEIPT/INVOICE/ACTION_REQUIRED emails, returns InvoiceData + ActionItem + key dates
+- [x] **S16.5** Engine tests — 82 tests across 4 files (schemas 39, imap 17, classifier 19, extractor 7)
+
+---
+
+## Epic 17: Email Triage Pipeline (Phase 3)
+
+**Goal:** Wire the email engine into a full pipeline with review queue, audit log, confidence-gated routing, orchestrator integration, and CLI commands.
+
+- [x] **S17.1** Email review queue + audit log — `corvus/queue/email_review.py` (SQLite, separate table), `corvus/audit/email_logger.py` (separate JSONL file)
+- [x] **S17.2** Email router (`corvus/router/email.py`) — confidence gate routing with `force_queue` override, `execute_email_action()` for IMAP operations
+- [x] **S17.3** Email triage pipeline (`corvus/orchestrator/email_pipelines.py`) — `run_email_triage()` (fetch → classify → extract → route) and `run_email_summary()` (classify → extract action items → LLM summary)
+- [x] **S17.4** Orchestrator integration — EMAIL_TRIAGE + EMAIL_SUMMARY intents in schemas, classifier prompt, router dispatch with `email_account` param
+- [x] **S17.5** CLI commands (`corvus email` group) — `triage`, `review`, `summary`, `status`, `accounts` subcommands
+- [x] **S17.6** Pipeline and CLI tests — 19 tests across 3 files (router 11, pipeline 11, CLI 8, minus overlap = 30 new)
+
+---
+
+## Epic 18: Email Intelligence (Phase 3)
+
+**Goal:** Add intelligence features on top of the email pipeline — interactive review, inbox summarization, daily digest integration, and voice assistant support.
+
+- [x] **S18.1** Interactive email review CLI — `corvus email review` with approve/reject/skip/quit per queued action, IMAP execution on approve
+- [x] **S18.2** Inbox summarization via LLM — `run_email_summary()` classifies all unread, extracts action items, generates natural language summary
+- [x] **S18.3** Daily digest integration — added email stats fields to `DailyDigest` model, `generate_digest()` accepts optional email audit/queue, `render_text()` includes email section
+- [x] **S18.4** Voice integration — email result handling in `_response_to_speech()` and `summarize_response()` for both EmailTriageResult and EmailSummaryResult

@@ -70,11 +70,34 @@ VOICE_TTS_VOICE: str = _internal.get("VOICE_TTS_VOICE", "af_heart")
 VOICE_TTS_LANG_CODE: str = _internal.get("VOICE_TTS_LANG_CODE", "a")
 VOICE_TTS_SPEED: float = float(_internal.get("VOICE_TTS_SPEED", "1.0"))
 VOICE_WAKEWORD_MODEL_PATH: str = _internal.get(
-    "VOICE_WAKEWORD_MODEL_PATH", str(PROJECT_ROOT / "models" / "corvus.onnx")
+    "VOICE_WAKEWORD_MODEL_PATH", "hey_jarvis"
 )
 VOICE_WAKEWORD_THRESHOLD: float = float(_internal.get("VOICE_WAKEWORD_THRESHOLD", "0.5"))
 VOICE_SILENCE_DURATION: float = float(_internal.get("VOICE_SILENCE_DURATION", "1.5"))
 VOICE_MAX_LISTEN_DURATION: float = float(_internal.get("VOICE_MAX_LISTEN_DURATION", "30.0"))
+
+
+# --- Email ---
+EMAIL_ACCOUNTS_PATH: str = _internal.get(
+    "EMAIL_ACCOUNTS_PATH", str(PROJECT_ROOT / "secrets" / "email_accounts.json")
+)
+EMAIL_REVIEW_DB_PATH: str = _internal.get(
+    "EMAIL_REVIEW_DB_PATH", str(PROJECT_ROOT / "data" / "email_queue.db")
+)
+EMAIL_AUDIT_LOG_PATH: str = _internal.get(
+    "EMAIL_AUDIT_LOG_PATH", str(PROJECT_ROOT / "data" / "email_audit.log")
+)
+EMAIL_BATCH_SIZE: int = int(_internal.get("EMAIL_BATCH_SIZE", "50"))
+
+
+def load_email_accounts() -> list[dict]:
+    """Load email account configs from JSON file."""
+    path = Path(EMAIL_ACCOUNTS_PATH)
+    if not path.exists():
+        return []
+    import json
+
+    return json.loads(path.read_text())
 
 
 def load_external() -> dict[str, str | None]:

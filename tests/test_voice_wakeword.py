@@ -35,6 +35,18 @@ class TestWakeWordDetector:
         async with detector:
             assert not detector.enabled
 
+    async def test_load_by_name(self, _mock_openwakeword):
+        """Test that a model name (no path separator/extension) loads via openwakeword."""
+        mock_model = MagicMock()
+        mock_model.predict.return_value = {}
+        mock_model.models = {"hey_jarvis": MagicMock()}
+        _mock_openwakeword.Model.return_value = mock_model
+
+        detector = WakeWordDetector(model_path="hey_jarvis", threshold=0.5)
+        async with detector:
+            assert detector.enabled
+            _mock_openwakeword.Model.assert_called_once_with(wakeword_models=["hey_jarvis"])
+
     async def test_detection_above_threshold(self, tmp_path, _mock_openwakeword):
         """Test that process_frame returns event when confidence exceeds threshold."""
         model_file = tmp_path / "corvus.onnx"

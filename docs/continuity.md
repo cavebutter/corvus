@@ -4,6 +4,95 @@
 
 ---
 
+## Session: 2026-02-27 (session 18) — Email Pipeline (Phase 3)
+
+### What was done
+- **Complete Epic 16: Email Engine Foundation**
+  - Added `imap-tools>=1.7` dependency to pyproject.toml (core, not optional)
+  - Added EMAIL_* config vars to `corvus/config.py` (accounts path, review DB, audit log, batch size)
+  - Created `corvus/schemas/email.py` — all email Pydantic models (EmailAccountConfig, EmailEnvelope, EmailMessage, EmailCategory, EmailClassification, EmailAction, EmailTriageTask, InvoiceData, ActionItem, EmailExtractionResult, EmailTriageResult, EmailSummaryResult, EmailReviewQueueItem, EmailAuditEntry)
+  - Created `corvus/integrations/imap.py` — async ImapClient wrapping imap-tools (asyncio.to_thread pattern), Gmail COPY+DELETE move support, folder auto-creation
+  - Created `corvus/executors/email_classifier.py` — LLM classification with category→action mapping, confidence gate thresholds
+  - Created `corvus/executors/email_extractor.py` — LLM extraction for invoices/receipts/action items
+
+- **Complete Epic 17: Email Triage Pipeline**
+  - Created `corvus/queue/email_review.py` — SQLite review queue (separate table from doc tagging)
+  - Created `corvus/audit/email_logger.py` — JSONL audit log (separate file from doc tagging)
+  - Created `corvus/router/email.py` — confidence gate routing with force_queue support
+  - Created `corvus/orchestrator/email_pipelines.py` — run_email_triage() and run_email_summary() pipeline handlers
+  - Added EMAIL_TRIAGE and EMAIL_SUMMARY intents to schemas/orchestrator.py
+  - Added email intents to planner/intent_classifier.py prompt
+  - Added _dispatch_email_triage() and _dispatch_email_summary() to orchestrator/router.py
+  - Added `corvus email` CLI command group (triage, review, summary, status, accounts)
+
+- **Complete Epic 18: Email Intelligence**
+  - Updated `corvus/digest/daily.py` — email stats in daily digest
+  - Updated `corvus/orchestrator/history.py` — email result summarization
+  - Updated `corvus/voice/pipeline.py` — voice-friendly email result speech
+
+- **112 new email tests** across 7 test files
+- **552 total tests pass, 0 failures**
+- Updated `backlog_current.md` — Epics 13-14, 16-18 moved to archive
+- Updated `backlog_archive.md` — full entries for Epics 13-14, 16-18
+- Updated `.gitignore` — added `secrets/email_accounts.json`
+
+### Architecture decisions
+- Separate SQLite table + JSONL audit file for email (no mixing with document tagging)
+- Account config in JSON file (secrets/email_accounts.json) — structured per-account data
+- imap-tools + asyncio.to_thread() — proven library, same async bridge as voice/sounddevice
+- Email is core dependency (not optional like voice)
+- Extraction runs inline during triage (immediate while body is in memory)
+- Gmail handling via `is_gmail` flag (explicit, not auto-detect)
+
+### Next steps
+- Create `secrets/email_accounts.json` with real account (app password for Gmail)
+- Test against live IMAP server: `corvus email triage --limit 5`
+- Train custom "hey corvus" wake word (open task from session 17)
+
+---
+
+## Session: 2026-02-27 (session 17)
+
+### What was done
+- **openWakeWord now works on Python 3.12** — installed from GitHub `main` branch which replaced `tflite-runtime` with `ai-edge-litert` (PyPI v0.6.0 still has the broken dep)
+- Updated `pyproject.toml` to install openwakeword from GitHub main
+- Updated `wakeword.py` to support loading models by name (e.g., `hey_jarvis`) in addition to file paths
+- Changed default `VOICE_WAKEWORD_MODEL_PATH` from `models/corvus.onnx` to `hey_jarvis` (pre-trained, auto-downloaded)
+- Fixed `test_voice_audio.py::TestAudioPlayer::test_play_calls_sounddevice` — scipy (now installed as transitive dep of openwakeword) exposed a mock gap in device rate query
+- Cloned `atlas-voice-training` into `tools/` for custom wake word training
+- **440 tests pass, 0 failures**
+
+### Open task: Train custom "hey corvus" wake word
+- **Tool:** `tools/atlas-voice-training` (Docker-based, ~1 hour on RTX 4090)
+- **Prerequisites not yet completed:**
+  1. Install `nvidia-container-toolkit` (needs NVIDIA apt repo added first):
+     ```bash
+     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+     sudo apt update && sudo apt install nvidia-container-toolkit
+     sudo nvidia-ctk runtime configure --runtime=docker
+     sudo systemctl restart docker
+     ```
+  2. Ensure user is in `docker` group: `sudo usermod -aG docker $USER && newgrp docker`
+  3. Run training: `cd tools/atlas-voice-training && ./train-wakeword.sh --standalone`
+     - Enter wake word: `hey corvus`
+     - Accept default settings (50k samples, 100k steps)
+     - Output: `docker-output/hey_corvus.onnx`
+  4. Copy model: `cp tools/atlas-voice-training/docker-output/hey_corvus.onnx models/`
+  5. Update `VOICE_WAKEWORD_MODEL_PATH` in config or `secrets/internal.env` to point to the `.onnx` file
+- **Current interim:** `hey_jarvis` pre-trained model works as a placeholder
+
+### Decisions made
+- openWakeWord installed from GitHub main (`git+https://...@main`) rather than PyPI, because PyPI v0.6.0 still ships `tflite-runtime` which has no Python 3.12 wheel
+- Default wake word set to `hey_jarvis` (pre-trained) as interim until custom model is trained
+- `WakeWordDetector` now distinguishes file paths (has extension or path separator) from model names (bare string like `hey_jarvis`)
+
+### Known issues
+- openwakeword PyPI release still broken for Python 3.12 — pinned to GitHub main in `pyproject.toml`
+- `nvidia-container-toolkit` not yet installed on host, blocking Docker GPU training
+
+---
+
 ## Session: 2026-02-27 (session 16)
 
 ### What was done

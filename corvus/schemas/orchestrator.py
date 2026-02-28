@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from corvus.schemas.email import EmailSummaryResult, EmailTriageResult
+
 
 class Intent(StrEnum):
     """User intent categories recognized by the orchestrator."""
@@ -19,6 +21,8 @@ class Intent(StrEnum):
     SHOW_STATUS = "show_status"
     WATCH_FOLDER = "watch_folder"
     WEB_SEARCH = "web_search"
+    EMAIL_TRIAGE = "email_triage"
+    EMAIL_SUMMARY = "email_summary"
     GENERAL_CHAT = "general_chat"
 
 
@@ -66,6 +70,12 @@ class IntentClassification(BaseModel):
     search_query: str | None = Field(
         default=None,
         description="Search query to pass to the web search engine",
+    )
+
+    # EMAIL_TRIAGE / EMAIL_SUMMARY params
+    email_account: str | None = Field(
+        default=None,
+        description="Specific email account to process, or None for all",
     )
 
 
@@ -150,5 +160,5 @@ class OrchestratorResponse(BaseModel):
     clarification_prompt: str | None = None
     result: (
         TagPipelineResult | FetchPipelineResult | StatusResult | DigestResult
-        | WebSearchResult | None
+        | WebSearchResult | EmailTriageResult | EmailSummaryResult | None
     ) = None
