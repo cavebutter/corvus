@@ -132,6 +132,58 @@ class SenderListManager:
         self.save()
         return True
 
+    def create(
+        self,
+        list_name: str,
+        action: str,
+        folder_key: str | None = None,
+        cleanup_days: int | None = None,
+        description: str = "",
+    ) -> None:
+        """Create a new sender list.
+
+        Args:
+            list_name: Unique name for the list.
+            action: One of "keep", "move", "delete".
+            folder_key: Folder key (required when action is "move").
+            cleanup_days: Optional retention period in days.
+            description: Optional description of the list.
+
+        Raises:
+            ValueError: If a list with the given name already exists.
+        """
+        if list_name in self._data.lists:
+            raise ValueError(f"List '{list_name}' already exists")
+
+        self._data.lists[list_name] = SenderListConfig(
+            description=description,
+            action=action,
+            folder_key=folder_key,
+            cleanup_days=cleanup_days,
+            addresses=[],
+        )
+        self._data.priority.append(list_name)
+        self._rebuild_index()
+        self.save()
+
+    def delete(self, list_name: str) -> None:
+        """Delete a sender list and all its addresses.
+
+        Args:
+            list_name: Name of the list to delete.
+
+        Raises:
+            KeyError: If the list does not exist.
+        """
+        if list_name not in self._data.lists:
+            raise KeyError(f"List '{list_name}' does not exist")
+
+        del self._data.lists[list_name]
+        if list_name in self._data.priority:
+            self._data.priority.remove(list_name)
+        self._rebuild_index()
+        self.save()
+
     def save(self) -> None:
         """Atomic write: temp file + rename to prevent corruption."""
         self._path.parent.mkdir(parents=True, exist_ok=True)

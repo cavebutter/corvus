@@ -1321,7 +1321,8 @@ async def _email_review_async() -> None:
             click.echo(f"--- [{i}/{len(remaining)}] Email from {task.from_address} ---")
             click.echo(f"  Subject: {task.subject}")
             click.echo(f"  Account: {task.account_email}")
-            click.echo(f"  Category: {task.classification.category.value}")
+            category_label = task.sender_list if task.sender_list else task.classification.category.value
+            click.echo(f"  Category: {category_label}")
             click.echo(f"  Confidence: {task.overall_confidence:.0%}")
             click.echo(f"  Proposed: {task.proposed_action.action_type.value}")
             if task.proposed_action.target_folder:
@@ -1640,6 +1641,63 @@ def email_list_remove(list_name: str, address: str) -> None:
         click.echo(f"Removed '{address.lower()}' from '{list_name}'.")
     else:
         click.echo(f"'{address.lower()}' not found in '{list_name}'.")
+
+
+@email.command("list-create")
+@click.argument("name")
+@click.option(
+    "--action",
+    required=True,
+    type=click.Choice(["keep", "move", "delete"]),
+    help="Action to take on matching emails.",
+)
+@click.option("--folder", default=None, help="Folder key (required when action=move).")
+@click.option("--cleanup-days", default=None, type=int, help="Retention period in days.")
+@click.option("--description", default="", help="Description of the list.")
+def email_list_create(
+    name: str,
+    action: str,
+    folder: str | None,
+    cleanup_days: int | None,
+    description: str,
+) -> None:
+    """Create a new sender list."""
+    if action == "move" and not folder:
+        raise click.UsageError("--folder is required when action is 'move'.")
+
+    from corvus.sender_lists import SenderListManager
+
+    mgr = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
+    try:
+        mgr.create(name, action, folder_key=folder, cleanup_days=cleanup_days, description=description)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"Created list '{name}' (action={action}).")
+
+
+@email.command("list-delete")
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def email_list_delete(name: str, yes: bool) -> None:
+    """Delete a sender list and all its addresses."""
+    from corvus.sender_lists import SenderListManager
+
+    mgr = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
+
+    if name not in mgr.data.lists:
+        raise click.ClickException(f"List '{name}' does not exist.")
+
+    lst = mgr.data.lists[name]
+    count = len(lst.addresses)
+
+    if not yes:
+        click.echo(f"List '{name}' has {count} address(es).")
+        if not click.confirm("Delete this list?"):
+            click.echo("Aborted.")
+            return
+
+    mgr.delete(name)
+    click.echo(f"Deleted list '{name}' ({count} address(es) removed).")
 
 
 @email.command("rationalize")

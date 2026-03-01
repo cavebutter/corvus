@@ -384,3 +384,73 @@ class TestSchemas:
         )
         assert match.folder_key is None
         assert match.cleanup_days is None
+
+
+# --- Create / Delete ---
+
+
+class TestCreateDelete:
+    def test_create_new_list(self, mgr):
+        mgr.create("finance", action="move", folder_key="receipts", description="Finance emails")
+        assert "finance" in mgr.data.lists
+        lst = mgr.data.lists["finance"]
+        assert lst.action == "move"
+        assert lst.folder_key == "receipts"
+        assert lst.addresses == []
+        assert lst.description == "Finance emails"
+
+    def test_create_persists_to_disk(self, sender_lists_path):
+        mgr = SenderListManager.load(sender_lists_path)
+        mgr.create("finance", action="keep")
+
+        mgr2 = SenderListManager.load(sender_lists_path)
+        assert "finance" in mgr2.data.lists
+
+    def test_create_duplicate_raises(self, mgr):
+        with pytest.raises(ValueError, match="already exists"):
+            mgr.create("white", action="keep")
+
+    def test_create_with_cleanup_days(self, mgr):
+        mgr.create("promo", action="move", folder_key="promos", cleanup_days=30)
+        assert mgr.data.lists["promo"].cleanup_days == 30
+
+    def test_create_adds_to_priority(self, mgr):
+        mgr.create("finance", action="keep")
+        assert "finance" in mgr.data.priority
+        # Should be appended at end
+        assert mgr.data.priority[-1] == "finance"
+
+    def test_delete_existing_list(self, mgr):
+        mgr.delete("vendor")
+        assert "vendor" not in mgr.data.lists
+        assert "vendor" not in mgr.data.priority
+
+    def test_delete_removes_addresses_from_index(self, mgr):
+        # Verify address exists first
+        assert mgr.lookup("deals@amazon.com") is not None
+        mgr.delete("vendor")
+        assert mgr.lookup("deals@amazon.com") is None
+
+    def test_delete_nonexistent_raises(self, mgr):
+        with pytest.raises(KeyError, match="does not exist"):
+            mgr.delete("nonexistent")
+
+    def test_delete_persists_to_disk(self, sender_lists_path):
+        mgr = SenderListManager.load(sender_lists_path)
+        mgr.delete("vendor")
+
+        mgr2 = SenderListManager.load(sender_lists_path)
+        assert "vendor" not in mgr2.data.lists
+
+    def test_custom_list_falls_back_to_other(self, mgr):
+        """A custom list name not in category_map should get EmailCategory.OTHER."""
+        mgr.create("finance", action="move", folder_key="receipts")
+        mgr.add("finance", "billing@example.com")
+
+        email = _make_email(from_addr="billing@example.com")
+        match = mgr.lookup("billing@example.com")
+        folders = {"inbox": "INBOX", "receipts": "Corvus/Receipts"}
+
+        task = mgr.build_task_from_sender_match(email, match, folders)
+        assert task.classification.category == EmailCategory.OTHER
+        assert task.sender_list == "finance"

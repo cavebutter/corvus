@@ -4,6 +4,39 @@
 
 ---
 
+## Session: 2026-03-01 (session 20) — Self-Serve Sender List Management
+
+### What was done
+- **S19.7: Self-serve list creation/deletion** — CLI commands to create and delete sender lists without editing JSON by hand
+  - Added `create()` and `delete()` methods to `SenderListManager` in `corvus/sender_lists.py`
+  - Added `corvus email list-create <name> --action <keep|move|delete> [--folder] [--cleanup-days] [--description]` CLI command with move-requires-folder validation
+  - Added `corvus email list-delete <name> [--yes/-y]` CLI command with confirmation prompt and address count display
+  - Changed review display to show sender list name as category label instead of mapped enum value
+  - Changed triage stats to use `match.list_name` directly instead of `task.classification.category.value`
+  - 21 new tests: 11 unit tests in `test_sender_lists.py` (TestCreateDelete), 10 CLI tests in `test_email_cli.py` (TestEmailListCreate + TestEmailListDelete)
+  - Full suite: **626 passed**, 0 failed
+
+### Design decisions
+- No `--category` flag on list-create — custom lists use list name as display label, falling back to `EmailCategory.OTHER` in the category_map
+- `create()` raises `ValueError` on duplicate, `delete()` raises `KeyError` on missing — CLI translates to ClickException
+- New lists appended to end of priority array
+
+### Open item
+- `corvus email status` labeling: "Queued" is confusing (reads as "still waiting" but is a historical total). Deferred — revisit later with a better status display redesign.
+
+### Modified files
+- `corvus/sender_lists.py` — `create()` and `delete()` methods
+- `corvus/cli.py` — `list-create` and `list-delete` commands, review category label fix
+- `corvus/orchestrator/email_pipelines.py` — triage stats use `match.list_name`
+- `tests/test_sender_lists.py` — TestCreateDelete class (11 tests)
+- `tests/test_email_cli.py` — TestEmailListCreate + TestEmailListDelete (10 tests)
+
+### Next steps
+- Revisit `corvus email status` display labels
+- Consider Epic 15 (Mobile Voice Access) or Phase 4 (calendar/task integration)
+
+---
+
 ## Session: 2026-02-27 (session 19) — Email Sender Lists and Rules
 
 ### What was done

@@ -265,6 +265,105 @@ class TestEmailRationalize:
         assert "duplicate" in result.output.lower()
 
 
+# --- corvus email list-create ---
+
+
+class TestEmailListCreate:
+    def test_create_with_keep(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-create", "finance", "--action", "keep"])
+        assert result.exit_code == 0
+        assert "Created list 'finance'" in result.output
+
+        data = json.loads(open(sender_lists_path).read())
+        assert "finance" in data["lists"]
+        assert data["lists"]["finance"]["action"] == "keep"
+
+    def test_create_with_move(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(
+            cli,
+            ["email", "list-create", "promo", "--action", "move", "--folder", "promos"],
+        )
+        assert result.exit_code == 0
+        assert "Created list 'promo'" in result.output
+
+        data = json.loads(open(sender_lists_path).read())
+        assert data["lists"]["promo"]["folder_key"] == "promos"
+
+    def test_create_with_delete(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-create", "junk", "--action", "delete"])
+        assert result.exit_code == 0
+        assert "Created list 'junk'" in result.output
+
+    def test_create_duplicate_error(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-create", "white", "--action", "keep"])
+        assert result.exit_code != 0
+        assert "already exists" in result.output
+
+    def test_create_move_requires_folder(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-create", "promo", "--action", "move"])
+        assert result.exit_code != 0
+        assert "--folder is required" in result.output
+
+    def test_create_with_cleanup_days(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(
+            cli,
+            ["email", "list-create", "temp", "--action", "move", "--folder", "temp",
+             "--cleanup-days", "90", "--description", "Temporary stuff"],
+        )
+        assert result.exit_code == 0
+
+        data = json.loads(open(sender_lists_path).read())
+        assert data["lists"]["temp"]["cleanup_days"] == 90
+        assert data["lists"]["temp"]["description"] == "Temporary stuff"
+
+
+# --- corvus email list-delete ---
+
+
+class TestEmailListDelete:
+    def test_delete_with_yes(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-delete", "black", "--yes"])
+        assert result.exit_code == 0
+        assert "Deleted list 'black'" in result.output
+
+        data = json.loads(open(sender_lists_path).read())
+        assert "black" not in data["lists"]
+
+    def test_delete_with_confirmation(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-delete", "black"], input="y\n")
+        assert result.exit_code == 0
+        assert "Deleted list 'black'" in result.output
+
+    def test_delete_abort(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-delete", "black"], input="n\n")
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+
+        # List should still exist
+        data = json.loads(open(sender_lists_path).read())
+        assert "black" in data["lists"]
+
+    def test_delete_nonexistent_error(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-delete", "nonexistent", "--yes"])
+        assert result.exit_code != 0
+        assert "does not exist" in result.output
+
+    def test_delete_shows_address_count(self, runner, sender_lists_path, monkeypatch):
+        monkeypatch.setattr("corvus.cli.EMAIL_SENDER_LISTS_PATH", sender_lists_path)
+        result = runner.invoke(cli, ["email", "list-delete", "white"], input="n\n")
+        assert "1 address(es)" in result.output
+
+
 # --- corvus email cleanup ---
 
 

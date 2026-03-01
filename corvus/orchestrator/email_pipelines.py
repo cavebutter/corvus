@@ -120,7 +120,7 @@ async def run_email_triage(
                         task = sender_lists.build_task_from_sender_match(
                             email, match, folders
                         )
-                        category = task.classification.category.value
+                        category = match.list_name
                         categories[category] = categories.get(category, 0) + 1
 
                         _emit(
