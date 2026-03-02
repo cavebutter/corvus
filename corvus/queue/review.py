@@ -181,6 +181,22 @@ class ReviewQueue:
         ).fetchone()
         return row[0]
 
+    def purge_resolved(self, cutoff: datetime) -> int:
+        """Delete resolved items reviewed before *cutoff*.
+
+        Only deletes rows where status != 'pending' AND reviewed_at < cutoff.
+        Returns the number of deleted rows.
+        """
+        cursor = self._conn.execute(
+            "DELETE FROM review_queue WHERE status != 'pending' AND reviewed_at < ?",
+            (cutoff.isoformat(),),
+        )
+        self._conn.commit()
+        count = cursor.rowcount
+        if count:
+            logger.info("Purged %d resolved review items older than %s", count, cutoff)
+        return count
+
     def _set_status(
         self,
         item_id: str,

@@ -870,3 +870,114 @@ class TestTriageSenderListAudit:
         assert len(entries) == 1
         assert entries[0].action == "sender_list_applied"
         assert entries[0].applied is True
+
+
+# --- Classification timeout tests ---
+
+
+class TestTriageClassifyTimeout:
+    """Classification timeout skips the message and continues."""
+
+    async def test_timeout_skips_message(self, account_config, tmp_path):
+        """A stuck classify_email call should be skipped after CLASSIFY_TIMEOUT."""
+        import asyncio
+
+        emails = [_make_email(uid="1"), _make_email(uid="2")]
+        task2 = _make_triage_task(uid="2")
+        call_count = 0
+
+        async def slow_then_ok(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                await asyncio.sleep(60)
+            return (task2, MagicMock())
+
+        imap_patch, _mock_imap = _patch_imap_client(messages=emails)
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=slow_then_ok),
+            patch(_ROUTE_PATH, new=AsyncMock(return_value=False)),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+            patch("corvus.orchestrator.email_pipelines.CLASSIFY_TIMEOUT", 0.1),
+        ):
+            result = await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+            )
+
+        # First message timed out (error), second processed normally
+        assert result.errors == 1
+        assert result.processed == 1
+
+    async def test_timeout_emits_progress(self, account_config, tmp_path):
+        """Timeout emits a skip message via on_progress."""
+        import asyncio
+
+        emails = [_make_email(uid="1")]
+
+        async def slow_classify(*args, **kwargs):
+            await asyncio.sleep(60)
+
+        imap_patch, _mock_imap = _patch_imap_client(messages=emails)
+        progress_calls: list[str] = []
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=slow_classify),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+            patch("corvus.orchestrator.email_pipelines.CLASSIFY_TIMEOUT", 0.1),
+        ):
+            await run_email_triage(
+                account_config=account_config,
+                ollama=AsyncMock(),
+                model="test-model",
+                review_db_path=str(tmp_path / "review.db"),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+                on_progress=progress_calls.append,
+            )
+
+        assert any("timed out" in msg for msg in progress_calls)
+
+    async def test_summary_timeout_skips_message(self, account_config, tmp_path):
+        """Summary pipeline also skips timed-out classifications."""
+        import asyncio
+
+        emails = [_make_email(uid="1"), _make_email(uid="2")]
+        task2 = _make_triage_task(uid="2", category=EmailCategory.NEWSLETTER)
+        call_count = 0
+
+        async def slow_then_ok(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                await asyncio.sleep(60)
+            return (task2, MagicMock())
+
+        imap_patch, _mock_imap = _patch_imap_client(messages=emails)
+        mock_ollama = AsyncMock()
+        mock_ollama.chat = AsyncMock(return_value=("Summary.", MagicMock()))
+
+        with (
+            imap_patch,
+            patch(_CLASSIFY_PATH, new=slow_then_ok),
+            patch(_EXTRACTABLE_PATH, new=frozenset()),
+            patch("corvus.orchestrator.email_pipelines.CLASSIFY_TIMEOUT", 0.1),
+        ):
+            result = await run_email_summary(
+                account_config=account_config,
+                ollama=mock_ollama,
+                model="test-model",
+                sender_lists_path=_write_sender_lists(tmp_path, {
+                    "lists": {}, "priority": [],
+                }),
+            )
+
+        # Only the second email should be counted
+        assert result.total_unread == 2
+        assert result.by_category.get("newsletter", 0) == 1
+        assert len(result.by_category) == 1

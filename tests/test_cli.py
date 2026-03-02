@@ -2047,3 +2047,56 @@ def test_chat_resume_bad_id(runner, monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert "No conversation found" in result.output
+
+
+# ------------------------------------------------------------------
+# corvus maintain
+# ------------------------------------------------------------------
+
+
+class TestMaintain:
+    def test_default_run(self, runner, monkeypatch, tmp_path):
+        """maintain purges all stores and prints summary."""
+        monkeypatch.setattr("corvus.cli.AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.EMAIL_AUDIT_LOG_PATH", str(tmp_path / "email_audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.WATCHDOG_AUDIT_LOG_PATH", str(tmp_path / "watchdog_audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.QUEUE_DB_PATH", str(tmp_path / "queue.db"))
+        monkeypatch.setattr("corvus.cli.EMAIL_REVIEW_DB_PATH", str(tmp_path / "email_queue.db"))
+
+        result = runner.invoke(cli, ["maintain"])
+
+        assert result.exit_code == 0
+        assert "Document audit log" in result.output
+        assert "Email audit log" in result.output
+        assert "Watchdog audit log" in result.output
+        assert "Document review queue" in result.output
+        assert "Email review queue" in result.output
+        assert "Total:" in result.output
+        assert "purged" in result.output
+
+    def test_dry_run(self, runner, monkeypatch, tmp_path):
+        """--dry-run shows counts without deleting."""
+        monkeypatch.setattr("corvus.cli.AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.EMAIL_AUDIT_LOG_PATH", str(tmp_path / "email_audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.WATCHDOG_AUDIT_LOG_PATH", str(tmp_path / "watchdog_audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.QUEUE_DB_PATH", str(tmp_path / "queue.db"))
+        monkeypatch.setattr("corvus.cli.EMAIL_REVIEW_DB_PATH", str(tmp_path / "email_queue.db"))
+
+        result = runner.invoke(cli, ["maintain", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+        assert "would be purged" in result.output
+
+    def test_days_override(self, runner, monkeypatch, tmp_path):
+        """--days overrides default retention."""
+        monkeypatch.setattr("corvus.cli.AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.EMAIL_AUDIT_LOG_PATH", str(tmp_path / "email_audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.WATCHDOG_AUDIT_LOG_PATH", str(tmp_path / "watchdog_audit.jsonl"))
+        monkeypatch.setattr("corvus.cli.QUEUE_DB_PATH", str(tmp_path / "queue.db"))
+        monkeypatch.setattr("corvus.cli.EMAIL_REVIEW_DB_PATH", str(tmp_path / "email_queue.db"))
+
+        result = runner.invoke(cli, ["maintain", "--days", "30"])
+
+        assert result.exit_code == 0
+        assert "Retention: 30 days" in result.output

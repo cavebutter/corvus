@@ -241,3 +241,15 @@
 - [x] **S19.5** Review integration — `[l]ist` option during review prompt (show lists, pick one, add sender, apply action), `[m]ove` option to pick an IMAP folder (lazy-loaded, cached per account), auto-apply pending items whose senders are on a non-white list at review start
 - [x] **S19.6** Folder cleanup — `fetch_uids_older_than()` on ImapClient (server-side IMAP BEFORE search), `corvus email cleanup [--account] [--dry-run]` CLI command to delete messages older than `cleanup_days` from folders with retention policies, 4 tests
 - [x] **S19.7** Self-serve list creation/deletion — `create()` and `delete()` methods on SenderListManager, `corvus email list-create <name> --action <keep|move|delete> [--folder] [--cleanup-days] [--description]` and `corvus email list-delete <name> [--yes]` CLI commands, review display shows sender list name as category label, triage stats use list name directly, 21 new tests (11 unit + 10 CLI)
+
+---
+
+## Epic 20: Maintenance — Log Retention & Database Cleanup
+
+**Goal:** Prevent unbounded growth of JSONL audit logs and SQLite review queues with a single `corvus maintain` command that purges old data across all stores.
+
+- [x] **S20.1** Config — `RETENTION_DAYS` (default 90) in `corvus/config.py`
+- [x] **S20.2** JSONL audit log purge — `purge_before(cutoff)` on `AuditLog`, `EmailAuditLog`, `WatchdogAuditLog` (atomic rewrite via temp file + `os.replace`, no-op if nothing to purge)
+- [x] **S20.3** SQLite review queue purge — `purge_resolved(cutoff)` on `ReviewQueue`, `EmailReviewQueue` (deletes non-pending rows where `reviewed_at < cutoff`)
+- [x] **S20.4** CLI command — `corvus maintain [--days N] [--dry-run]` (purges all 5 stores, prints per-store summary)
+- [x] **S20.5** Tests — 25 new tests (4 per audit logger × 3, 4 per review queue × 2, 3 CLI maintain tests), 653 total pass

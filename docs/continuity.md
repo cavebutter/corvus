@@ -4,6 +4,44 @@
 
 ---
 
+## Session: 2026-03-02 (session 21) — Log Retention and Database Cleanup
+
+### What was done
+- **Epic 20: Maintenance** — `corvus maintain` command to purge old audit logs and resolved review queue items
+  - Added `RETENTION_DAYS` config variable (default 90) to `corvus/config.py`
+  - Added `purge_before(cutoff)` to all 3 JSONL audit loggers (`audit/logger.py`, `audit/email_logger.py`, `watchdog/audit.py`) — atomic rewrite via temp file + `os.replace`, skips rewrite if nothing to purge, returns purged count
+  - Added `purge_resolved(cutoff)` to both SQLite review queues (`queue/review.py`, `queue/email_review.py`) — deletes rows where `status != 'pending' AND reviewed_at < cutoff`, returns count
+  - Added `corvus maintain [--days N] [--dry-run]` top-level CLI command — purges all 5 stores, prints per-store summary
+  - 25 new tests: 4 per audit logger (3 files), 4 per review queue (2 files), 3 maintain CLI tests
+  - Full suite: **653 passed**, 0 failed
+
+### Design decisions
+- Simple delete, no archiving — data sizes are small and old entries have no ongoing value
+- Not included: conversation store (users may want chat history) and watchdog hash store (removing hashes would cause re-processing)
+- Top-level command (not under `email`) since it covers all pipelines
+- `--dry-run` counts by reading/querying without modifying, `--days` overrides config default
+
+### Modified files
+- `corvus/config.py` — `RETENTION_DAYS`
+- `corvus/audit/logger.py` — `purge_before()`
+- `corvus/audit/email_logger.py` — `purge_before()`
+- `corvus/watchdog/audit.py` — `purge_before()`
+- `corvus/queue/review.py` — `purge_resolved()`
+- `corvus/queue/email_review.py` — `purge_resolved()`
+- `corvus/cli.py` — `maintain` command + `RETENTION_DAYS` import
+- `tests/test_audit_log.py` — `TestPurge` class (4 tests)
+- `tests/test_watchdog_audit.py` — `TestPurge` class (4 tests)
+- `tests/test_email_audit_log.py` — new file (4 tests)
+- `tests/test_review_queue.py` — `TestPurgeResolved` class (4 tests)
+- `tests/test_email_review_queue.py` — new file (4 tests)
+- `tests/test_cli.py` — `TestMaintain` class (3 tests)
+
+### Next steps
+- Candidate: cron/systemd timer for periodic `corvus maintain`
+- Candidate: `corvus email status` labeling redesign (open from session 20)
+
+---
+
 ## Session: 2026-03-01 (session 20) — Self-Serve Sender List Management
 
 ### What was done

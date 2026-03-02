@@ -10,6 +10,7 @@ Commands:
     corvus ask             — single natural language query to the orchestrator
     corvus chat            — interactive REPL with the orchestrator
     corvus voice           — voice assistant (wake word, STT, TTS)
+    corvus maintain        — purge old audit logs and resolved queue items
     corvus email triage    — classify and triage unread emails
     corvus email review    — review queued email actions
     corvus email summary   — summarize unread emails
@@ -36,6 +37,7 @@ from corvus.config import (
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
     QUEUE_DB_PATH,
+    RETENTION_DAYS,
     VOICE_MAX_LISTEN_DURATION,
     VOICE_SILENCE_DURATION,
     VOICE_STT_BEAM_SIZE,
@@ -1116,6 +1118,84 @@ async def _voice_async(
 
 
 # ------------------------------------------------------------------
+# corvus maintain
+# ------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--days", default=None, type=int, help=f"Retention period in days (default: {RETENTION_DAYS}).")
+@click.option("--dry-run", is_flag=True, help="Show what would be purged without deleting.")
+def maintain(days: int | None, dry_run: bool) -> None:
+    """Purge old audit logs and resolved review queue items."""
+    from datetime import UTC, datetime, timedelta
+
+    from corvus.audit.email_logger import EmailAuditLog
+    from corvus.audit.logger import AuditLog
+    from corvus.queue.email_review import EmailReviewQueue
+    from corvus.queue.review import ReviewQueue
+    from corvus.watchdog.audit import WatchdogAuditLog
+
+    retention = days if days is not None else RETENTION_DAYS
+    cutoff = datetime.now(UTC) - timedelta(days=retention)
+
+    click.echo(f"Retention: {retention} days (cutoff: {cutoff.strftime('%Y-%m-%d %H:%M:%S')} UTC)")
+    if dry_run:
+        click.echo("DRY RUN — no data will be deleted.\n")
+    else:
+        click.echo()
+
+    total = 0
+
+    # --- Audit logs (JSONL) ---
+    doc_audit = AuditLog(AUDIT_LOG_PATH)
+    email_audit = EmailAuditLog(EMAIL_AUDIT_LOG_PATH)
+    watchdog_audit = WatchdogAuditLog(WATCHDOG_AUDIT_LOG_PATH)
+
+    for label, log in [
+        ("Document audit log", doc_audit),
+        ("Email audit log", email_audit),
+        ("Watchdog audit log", watchdog_audit),
+    ]:
+        if dry_run:
+            entries = log.read_entries()
+            count = sum(1 for e in entries if e.timestamp < cutoff)
+        else:
+            count = log.purge_before(cutoff)
+        total += count
+        click.echo(f"  {label}: {count} entries {'would be ' if dry_run else ''}purged")
+
+    # --- Review queues (SQLite) ---
+    with ReviewQueue(QUEUE_DB_PATH) as rq:
+        if dry_run:
+            row = rq._conn.execute(
+                "SELECT COUNT(*) FROM review_queue "
+                "WHERE status != 'pending' AND reviewed_at < ?",
+                (cutoff.isoformat(),),
+            ).fetchone()
+            count = row[0]
+        else:
+            count = rq.purge_resolved(cutoff)
+        total += count
+        click.echo(f"  Document review queue: {count} items {'would be ' if dry_run else ''}purged")
+
+    with EmailReviewQueue(EMAIL_REVIEW_DB_PATH) as erq:
+        if dry_run:
+            row = erq._conn.execute(
+                "SELECT COUNT(*) FROM email_review_queue "
+                "WHERE status != 'pending' AND reviewed_at < ?",
+                (cutoff.isoformat(),),
+            ).fetchone()
+            count = row[0]
+        else:
+            count = erq.purge_resolved(cutoff)
+        total += count
+        click.echo(f"  Email review queue: {count} items {'would be ' if dry_run else ''}purged")
+
+    verb = "would be purged" if dry_run else "purged"
+    click.echo(f"\nTotal: {total} entries {verb}.")
+
+
+# ------------------------------------------------------------------
 # corvus email (command group)
 # ------------------------------------------------------------------
 
@@ -1333,8 +1413,8 @@ async def _email_review_async() -> None:
 
             choice = click.prompt(
                 "  Action",
-                type=click.Choice(["a", "r", "s", "l", "m", "q"], case_sensitive=False),
-                prompt_suffix=" [a]pprove / [r]eject / [s]kip / [l]ist / [m]ove / [q]uit: ",
+                type=click.Choice(["a", "r", "s", "d", "l", "m", "q"], case_sensitive=False),
+                prompt_suffix=" [a]pprove / [r]eject / [s]kip / [d]elete / [l]ist / [m]ove / [q]uit: ",
             )
 
             if choice == "a":
@@ -1369,6 +1449,35 @@ async def _email_review_async() -> None:
                 audit_log.log_review_rejected(task)
                 click.echo("  -> Rejected.")
                 rejected += 1
+            elif choice == "d":
+                account_config = accounts_cache.get(task.account_email)
+                if not account_config:
+                    click.echo(
+                        f"  -> ERROR: Account {task.account_email} not found in config.",
+                        err=True,
+                    )
+                    continue
+
+                try:
+                    async with ImapClient(account_config) as imap:
+                        await imap.delete([task.uid])
+                    review_queue.approve(item.id, notes="Deleted via CLI review")
+                    from corvus.schemas.email import EmailAction, EmailActionType
+
+                    delete_task = task.model_copy(update={
+                        "proposed_action": EmailAction(
+                            action_type=EmailActionType.DELETE,
+                        ),
+                    })
+                    audit_log.log_review_approved(delete_task)
+                    click.echo("  -> Deleted.")
+                    approved += 1
+                except Exception:
+                    logger.exception("Error deleting email %s", task.uid)
+                    click.echo(
+                        "  -> ERROR: Failed to delete. Item remains pending.",
+                        err=True,
+                    )
             elif choice == "s":
                 click.echo("  -> Skipped.")
                 skipped += 1

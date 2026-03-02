@@ -140,3 +140,56 @@ class TestEdgeCases:
 
         entries = audit2.read_entries()
         assert len(entries) == 2
+
+
+class TestPurge:
+    def test_purge_removes_old_keeps_recent(self, tmp_path):
+        audit = WatchdogAuditLog(tmp_path / "audit.jsonl")
+        now = datetime.now(UTC)
+
+        old_event = _make_event(file_name="old.pdf")
+        old_event.timestamp = now - timedelta(days=100)
+        audit.log(old_event)
+
+        new_event = _make_event(file_name="new.pdf")
+        new_event.timestamp = now
+        audit.log(new_event)
+
+        cutoff = now - timedelta(days=50)
+        purged = audit.purge_before(cutoff)
+        assert purged == 1
+
+        remaining = audit.read_entries()
+        assert len(remaining) == 1
+        assert remaining[0].file_name == "new.pdf"
+
+    def test_purge_returns_correct_count(self, tmp_path):
+        audit = WatchdogAuditLog(tmp_path / "audit.jsonl")
+        now = datetime.now(UTC)
+
+        for i in range(4):
+            event = _make_event(file_name=f"old{i}.pdf")
+            event.timestamp = now - timedelta(days=100)
+            audit.log(event)
+
+        new_event = _make_event(file_name="recent.pdf")
+        new_event.timestamp = now
+        audit.log(new_event)
+
+        purged = audit.purge_before(now - timedelta(days=50))
+        assert purged == 4
+
+    def test_purge_noop_when_nothing_old(self, tmp_path):
+        log_path = tmp_path / "audit.jsonl"
+        audit = WatchdogAuditLog(log_path)
+        audit.log(_make_event())
+
+        old_mtime = log_path.stat().st_mtime
+
+        purged = audit.purge_before(datetime.now(UTC) - timedelta(days=999))
+        assert purged == 0
+        assert log_path.stat().st_mtime == old_mtime
+
+    def test_purge_nonexistent_file(self, tmp_path):
+        audit = WatchdogAuditLog(tmp_path / "nonexistent.jsonl")
+        assert audit.purge_before(datetime.now(UTC)) == 0

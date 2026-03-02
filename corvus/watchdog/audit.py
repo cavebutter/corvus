@@ -5,6 +5,8 @@ Separate from the tagging audit log — watchdog events have a different shape
 """
 
 import logging
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -75,3 +77,44 @@ class WatchdogAuditLog:
             entries = entries[-limit:]
 
         return entries
+
+    def purge_before(self, cutoff: datetime) -> int:
+        """Remove entries older than *cutoff*. Returns count of purged entries.
+
+        Uses atomic rewrite (temp file + os.replace) to avoid corruption.
+        Skips the rewrite entirely if nothing would be purged.
+        """
+        if not self._path.exists():
+            return 0
+
+        keep_lines: list[str] = []
+        purged = 0
+        with self._path.open() as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                event = WatchdogEvent.model_validate_json(stripped)
+                if event.timestamp < cutoff:
+                    purged += 1
+                else:
+                    keep_lines.append(stripped)
+
+        if purged == 0:
+            return 0
+
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._path.parent), suffix=".tmp"
+        )
+        try:
+            os.write(fd, "".join(ln + "\n" for ln in keep_lines).encode())
+        finally:
+            os.close(fd)
+        try:
+            os.replace(tmp_path, self._path)
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
+
+        logger.info("Purged %d watchdog audit entries older than %s", purged, cutoff)
+        return purged

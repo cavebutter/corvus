@@ -1,5 +1,7 @@
 """Tests for the SQLite-backed review queue."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from corvus.queue.review import ReviewQueue
@@ -188,3 +190,51 @@ class TestCountPending:
 
         queue.approve(item1.id)
         assert queue.count_pending() == 1
+
+
+class TestPurgeResolved:
+    def test_purge_deletes_old_resolved(self, queue: ReviewQueue):
+        item1 = queue.add(_make_task(1), _make_proposed_update(1))
+        item2 = queue.add(_make_task(2), _make_proposed_update(2))
+        queue.approve(item1.id)
+        queue.reject(item2.id)
+
+        cutoff = datetime.now(UTC) + timedelta(seconds=1)
+        purged = queue.purge_resolved(cutoff)
+        assert purged == 2
+        assert queue.list_all() == []
+
+    def test_purge_keeps_pending_regardless_of_age(self, queue: ReviewQueue):
+        queue.add(_make_task(1), _make_proposed_update(1))
+        item2 = queue.add(_make_task(2), _make_proposed_update(2))
+        queue.approve(item2.id)
+
+        cutoff = datetime.now(UTC) + timedelta(seconds=1)
+        purged = queue.purge_resolved(cutoff)
+        assert purged == 1
+
+        remaining = queue.list_all()
+        assert len(remaining) == 1
+        assert remaining[0].status == ReviewStatus.PENDING
+
+    def test_purge_returns_correct_count(self, queue: ReviewQueue):
+        items = []
+        for i in range(5):
+            items.append(queue.add(_make_task(i), _make_proposed_update(i)))
+
+        for item in items[:3]:
+            queue.approve(item.id)
+
+        cutoff = datetime.now(UTC) + timedelta(seconds=1)
+        purged = queue.purge_resolved(cutoff)
+        assert purged == 3
+        assert queue.count_pending() == 2
+
+    def test_purge_respects_cutoff(self, queue: ReviewQueue):
+        item = queue.add(_make_task(1), _make_proposed_update(1))
+        queue.approve(item.id)
+
+        # Cutoff before the review happened — nothing should be purged
+        cutoff = datetime.now(UTC) - timedelta(days=1)
+        purged = queue.purge_resolved(cutoff)
+        assert purged == 0

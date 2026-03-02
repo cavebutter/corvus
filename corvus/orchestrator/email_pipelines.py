@@ -4,6 +4,7 @@ Each handler encapsulates a complete pipeline and returns a typed result.
 CLI commands and the orchestrator router both call these handlers.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable
 
@@ -23,6 +24,9 @@ from corvus.schemas.email import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Per-message timeout for LLM classification (seconds).
+CLASSIFY_TIMEOUT = 15.0
 
 
 async def run_email_triage(
@@ -139,14 +143,26 @@ async def run_email_triage(
                     # but force KEEP action and queue for review
                     force_keep = match is not None and match.list_name == "white"
 
-                    # Classify via LLM
-                    task, _raw = await classify_email(
-                        email,
-                        ollama=ollama,
-                        model=model,
-                        folders=folders,
-                        keep_alive=keep_alive,
-                    )
+                    # Classify via LLM (with timeout to skip stuck messages)
+                    try:
+                        task, _raw = await asyncio.wait_for(
+                            classify_email(
+                                email,
+                                ollama=ollama,
+                                model=model,
+                                folders=folders,
+                                keep_alive=keep_alive,
+                            ),
+                            timeout=CLASSIFY_TIMEOUT,
+                        )
+                    except TimeoutError:
+                        logger.warning(
+                            "Classification timed out for email %s: %s",
+                            email.uid, email.subject,
+                        )
+                        _emit(f"  Skipped: classification timed out ({CLASSIFY_TIMEOUT:.0f}s)")
+                        errors += 1
+                        continue
 
                     # Override for whitelisted senders
                     if force_keep:
@@ -306,13 +322,23 @@ async def run_email_summary(
                 match = sender_lists.lookup(email.from_address) if sender_lists else None
                 is_whitelisted = match is not None and match.list_name == "white"
 
-                task, _raw = await classify_email(
-                    email,
-                    ollama=ollama,
-                    model=model,
-                    folders=account_config.folders,
-                    keep_alive=keep_alive,
-                )
+                try:
+                    task, _raw = await asyncio.wait_for(
+                        classify_email(
+                            email,
+                            ollama=ollama,
+                            model=model,
+                            folders=account_config.folders,
+                            keep_alive=keep_alive,
+                        ),
+                        timeout=CLASSIFY_TIMEOUT,
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "Classification timed out for email %s: %s",
+                        email.uid, email.subject,
+                    )
+                    continue
 
                 cat = task.classification.category.value
                 by_category[cat] = by_category.get(cat, 0) + 1

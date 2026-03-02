@@ -92,6 +92,9 @@ EMAIL_SENDER_LISTS_PATH: str = _internal.get(
     "EMAIL_SENDER_LISTS_PATH", str(PROJECT_ROOT / "data" / "sender_lists.json")
 )
 
+# --- Maintenance ---
+RETENTION_DAYS: int = int(_internal.get("RETENTION_DAYS", "90"))
+
 
 def load_email_accounts() -> list[dict]:
     """Load email account configs from JSON file."""

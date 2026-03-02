@@ -4,7 +4,7 @@ Uses Click's CliRunner so no real IMAP/Ollama connections are required.
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -169,6 +169,74 @@ class TestEmailReview:
 
         assert result.exit_code == 0
         assert "No pending" in result.output
+
+
+    def test_delete_action(self, runner):
+        """Pressing 'd' during review deletes the email and marks it approved."""
+        from datetime import datetime, timezone
+
+        from corvus.schemas.document_tagging import GateAction
+        from corvus.schemas.email import (
+            EmailAction,
+            EmailActionType,
+            EmailClassification,
+            EmailReviewQueueItem,
+            EmailTriageTask,
+        )
+
+        task = EmailTriageTask(
+            uid="42",
+            account_email="me@example.com",
+            subject="Junk mail",
+            from_address="spammer@junk.com",
+            classification=EmailClassification(
+                category="spam",
+                confidence=0.85,
+                reasoning="Looks like spam",
+                suggested_action="delete",
+                summary="Spammy stuff",
+            ),
+            proposed_action=EmailAction(action_type=EmailActionType.KEEP),
+            overall_confidence=0.85,
+            gate_action=GateAction.QUEUE_FOR_REVIEW,
+        )
+        item = EmailReviewQueueItem(
+            id="item-1",
+            created_at=datetime.now(timezone.utc),
+            task=task,
+        )
+
+        mock_queue = MagicMock()
+        mock_queue.list_pending.return_value = [item]
+        mock_queue.__enter__ = MagicMock(return_value=mock_queue)
+        mock_queue.__exit__ = MagicMock(return_value=False)
+
+        mock_imap = AsyncMock()
+        mock_imap.__aenter__.return_value = mock_imap
+        mock_imap.__aexit__.return_value = False
+        mock_imap.delete = AsyncMock()
+
+        mock_audit = MagicMock()
+
+        mock_slm = MagicMock()
+        mock_slm.lookup.return_value = None
+        mock_slm.data.lists = {}
+        mock_slm_cls = MagicMock()
+        mock_slm_cls.load.return_value = mock_slm
+
+        with (
+            patch("corvus.queue.email_review.EmailReviewQueue", return_value=mock_queue),
+            patch("corvus.audit.email_logger.EmailAuditLog", return_value=mock_audit),
+            patch("corvus.sender_lists.SenderListManager", mock_slm_cls),
+            patch("corvus.cli.load_email_accounts", return_value=SAMPLE_ACCOUNTS),
+            patch("corvus.integrations.imap.ImapClient", return_value=mock_imap),
+        ):
+            result = runner.invoke(cli, ["email", "review"], input="d\n")
+
+        assert result.exit_code == 0
+        assert "Deleted" in result.output
+        mock_queue.approve.assert_called_once()
+        assert "Deleted via CLI review" in mock_queue.approve.call_args.kwargs.get("notes", "")
 
 
 # --- corvus email lists ---
