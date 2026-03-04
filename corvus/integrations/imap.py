@@ -12,12 +12,21 @@ Usage::
 """
 
 import asyncio
+import imaplib
 import logging
+import ssl
+from collections.abc import Callable
 from email.utils import parseaddr
+from typing import TypeVar
 
 from imap_tools import AND, MailBox, MailboxLoginError, MailMessage
 
 from corvus.schemas.email import EmailAccountConfig, EmailEnvelope, EmailMessage
+
+_T = TypeVar("_T")
+
+# Errors that indicate a dead IMAP connection (server dropped us).
+_CONNECTION_LOST_ERRORS = (imaplib.IMAP4.abort, ssl.SSLEOFError, OSError)
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +81,7 @@ class ImapClient:
     def __init__(self, config: EmailAccountConfig) -> None:
         self._config = config
         self._mailbox: MailBox | None = None
+        self._current_folder: str | None = None
 
     async def __aenter__(self) -> "ImapClient":
         self._mailbox = await asyncio.to_thread(self._connect)
@@ -108,6 +118,26 @@ class ImapClient:
             except Exception:
                 logger.debug("Error during IMAP logout", exc_info=True)
 
+    def _reconnect_sync(self) -> None:
+        """Drop the dead connection and establish a fresh one (sync)."""
+        logger.warning("IMAP connection lost — reconnecting to %s", self._config.server)
+        try:
+            if self._mailbox:
+                self._mailbox.logout()
+        except Exception:
+            pass
+        self._mailbox = self._connect()
+        if self._current_folder:
+            self._mailbox.folder.set(self._current_folder)
+
+    def _with_reconnect(self, fn: Callable[[], _T]) -> _T:
+        """Run *fn* synchronously; on connection-lost errors, reconnect and retry once."""
+        try:
+            return fn()
+        except _CONNECTION_LOST_ERRORS:
+            self._reconnect_sync()
+            return fn()
+
     @property
     def mailbox(self) -> MailBox:
         if self._mailbox is None:
@@ -131,6 +161,7 @@ class ImapClient:
 
         def _fetch() -> list[EmailEnvelope]:
             self.mailbox.folder.set(folder)
+            self._current_folder = folder
             criteria = AND(seen=False)
             msgs = self.mailbox.fetch(
                 criteria,
@@ -159,6 +190,7 @@ class ImapClient:
 
         def _fetch() -> EmailMessage:
             self.mailbox.folder.set(folder)
+            self._current_folder = folder
             msgs = list(
                 self.mailbox.fetch(AND(uid=uid), mark_seen=False, limit=1)
             )
@@ -183,6 +215,7 @@ class ImapClient:
 
         def _fetch() -> list[EmailMessage]:
             self.mailbox.folder.set(folder)
+            self._current_folder = folder
             criteria = AND(seen=False)
             msgs = self.mailbox.fetch(
                 criteria,
@@ -211,8 +244,10 @@ class ImapClient:
             await asyncio.to_thread(self._move_sync, uids, target_folder)
 
     def _move_sync(self, uids: list[str], target_folder: str) -> None:
-        """Standard IMAP move (sync)."""
-        self.mailbox.move(uids, target_folder)
+        """Standard IMAP move (sync), with auto-reconnect."""
+        def _do() -> None:
+            self.mailbox.move(uids, target_folder)
+        self._with_reconnect(_do)
         logger.info("Moved %d email(s) to %s", len(uids), target_folder)
 
     async def _gmail_move(self, uids: list[str], target_folder: str) -> None:
@@ -223,8 +258,8 @@ class ImapClient:
         """
 
         def _do() -> None:
-            self.mailbox.copy(uids, target_folder)
-            self.mailbox.delete(uids)
+            self._with_reconnect(lambda: self.mailbox.copy(uids, target_folder))
+            self._with_reconnect(lambda: self.mailbox.delete(uids))
             logger.info("Gmail-moved %d email(s) to %s", len(uids), target_folder)
 
         await asyncio.to_thread(_do)
@@ -235,7 +270,7 @@ class ImapClient:
             return
 
         def _do() -> None:
-            self.mailbox.delete(uids)
+            self._with_reconnect(lambda: self.mailbox.delete(uids))
             logger.info("Deleted %d email(s)", len(uids))
 
         await asyncio.to_thread(_do)
@@ -246,7 +281,7 @@ class ImapClient:
             return
 
         def _do() -> None:
-            self.mailbox.flag(uids, {flag}, value)
+            self._with_reconnect(lambda: self.mailbox.flag(uids, {flag}, value))
             logger.info(
                 "%s flag %s on %d email(s)",
                 "Set" if value else "Cleared",

@@ -4,10 +4,33 @@
 
 ---
 
+## Session: 2026-03-04 (session 22) — IMAP Reconnect and Review Limit
+
+### What was done
+- **IMAP auto-reconnect** — `ImapClient` now detects dead SSL connections (`IMAP4.abort`, `SSLEOFError`, `OSError`) and transparently reconnects + retries once. Fixes cascading failures when IMAP server drops the connection mid-batch during `corvus email triage`.
+  - Added `_reconnect_sync()` and `_with_reconnect(fn)` to `ImapClient`
+  - Tracks `_current_folder` to restore folder selection after reconnect
+  - All action methods (`move`, `delete`, `flag`, `_gmail_move`) wrapped with retry logic
+- **`corvus email review --limit N`** — optional `-n`/`--limit` flag to cap the number of review queue items fetched, matching the existing `--limit` on triage. Useful when the queue has built up over days.
+  - Added `limit` param to `EmailReviewQueue.list_pending()` (SQL LIMIT clause)
+  - Threaded through CLI → `_email_review_async` → `list_pending(limit=limit)`
+
+### Tests
+- Full suite: **653 passed**, 0 failed
+
+### Next steps
+- Monitor next triage run to confirm reconnect works in practice
+- Consider adding a consecutive-error threshold to abort early if reconnect also fails repeatedly
+
+---
+
 ## Session: 2026-03-02 (session 21) — Log Retention and Database Cleanup
 
 ### What was done
 - **Epic 20: Maintenance** — `corvus maintain` command to purge old audit logs and resolved review queue items
+- **Epic 21: PWA Mobile Interface** — fully sketched in backlog (9 stories) covering FastAPI backend, REST API, dashboard + review frontend, voice over WebSocket, Ntfy push notifications, Cloudflare Tunnel
+- **Future epics documented** — Calendar/Todo (CalDAV + Microsoft Graph), Smart Home (Hue, Ecobee, Kasa/TP-Link) as outlines in backlog
+- Cleaned up duplicate "whitelist" sender list — moved 3 addresses to "white", deleted "whitelist"
   - Added `RETENTION_DAYS` config variable (default 90) to `corvus/config.py`
   - Added `purge_before(cutoff)` to all 3 JSONL audit loggers (`audit/logger.py`, `audit/email_logger.py`, `watchdog/audit.py`) — atomic rewrite via temp file + `os.replace`, skips rewrite if nothing to purge, returns purged count
   - Added `purge_resolved(cutoff)` to both SQLite review queues (`queue/review.py`, `queue/email_review.py`) — deletes rows where `status != 'pending' AND reviewed_at < cutoff`, returns count
@@ -36,9 +59,21 @@
 - `tests/test_email_review_queue.py` — new file (4 tests)
 - `tests/test_cli.py` — `TestMaintain` class (3 tests)
 
+### Design decisions
+- PWA approach chosen over native app (personal tool, no app store overhead)
+- Ntfy for push notifications (self-hostable, simple HTTP POST)
+- Smart home: direct Hue integration first (local API, no cloud), Home Assistant only if 3+ device types make per-device maintenance painful
+- Calendar: separate CalDAV calendar (Radicale) subscribed from iCloud, not writing to shared Apple calendar
+- Todo: Microsoft Graph API for Microsoft To-Do
+
+### Git status
+- Epic 20 changes are staged but **not committed** — user does all git ops manually
+- Commit message was provided in session
+
 ### Next steps
-- Candidate: cron/systemd timer for periodic `corvus maintain`
-- Candidate: `corvus email status` labeling redesign (open from session 20)
+- **Epic 21 (PWA)** is the next major body of work — start with S21.1 (FastAPI server foundation)
+- Uncommitted: Epic 20 maintain implementation (commit message ready)
+- Open: `corvus email status` labeling redesign (deferred from session 20)
 
 ---
 

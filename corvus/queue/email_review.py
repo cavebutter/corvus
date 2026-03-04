@@ -170,9 +170,14 @@ class EmailReviewQueue:
             return None
         return _row_to_item(row)
 
-    def list_pending(self) -> list[EmailReviewQueueItem]:
-        """List all items awaiting review, oldest first."""
-        rows = self._conn.execute(_SELECT_PENDING).fetchall()
+    def list_pending(self, limit: int | None = None) -> list[EmailReviewQueueItem]:
+        """List items awaiting review, oldest first."""
+        if limit is not None:
+            rows = self._conn.execute(
+                _SELECT_PENDING + " LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute(_SELECT_PENDING).fetchall()
         return [_row_to_item(r) for r in rows]
 
     def list_all(self, limit: int = 50) -> list[EmailReviewQueueItem]:

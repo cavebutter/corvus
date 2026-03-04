@@ -1296,12 +1296,13 @@ async def _email_triage_async(
 
 
 @email.command("review")
-def email_review() -> None:
+@click.option("--limit", "-n", default=None, type=int, help="Max items to review.")
+def email_review(limit: int | None) -> None:
     """Review queued email actions."""
-    asyncio.run(_email_review_async())
+    asyncio.run(_email_review_async(limit=limit))
 
 
-async def _email_review_async() -> None:
+async def _email_review_async(*, limit: int | None = None) -> None:
     from corvus.audit.email_logger import EmailAuditLog
     from corvus.integrations.imap import ImapClient
     from corvus.queue.email_review import EmailReviewQueue
@@ -1313,7 +1314,7 @@ async def _email_review_async() -> None:
     sender_lists = SenderListManager.load(EMAIL_SENDER_LISTS_PATH)
 
     with EmailReviewQueue(EMAIL_REVIEW_DB_PATH) as review_queue:
-        pending = review_queue.list_pending()
+        pending = review_queue.list_pending(limit=limit)
         if not pending:
             click.echo("No pending email actions to review.")
             return
