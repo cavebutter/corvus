@@ -454,3 +454,82 @@ class TestCreateDelete:
         task = mgr.build_task_from_sender_match(email, match, folders)
         assert task.classification.category == EmailCategory.OTHER
         assert task.sender_list == "finance"
+
+
+# --- Domain rules ---
+
+
+def _domain_data() -> dict:
+    """Sample data with a domain rule."""
+    data = _sample_data()
+    data["domain_rules"] = [
+        {
+            "domain": "amazon.com",
+            "action": "move",
+            "folder_key": "amazon",
+            "description": "All Amazon mail",
+            "account_email": "jay@jay-cohen.info",
+        }
+    ]
+    return data
+
+
+@pytest.fixture
+def domain_mgr(tmp_path):
+    path = tmp_path / "sender_lists.json"
+    path.write_text(json.dumps(_domain_data(), indent=2))
+    return SenderListManager.load(path)
+
+
+class TestDomainRules:
+    def test_domain_match(self, domain_mgr):
+        match = domain_mgr.lookup(
+            "shipment@amazon.com", account_email="jay@jay-cohen.info"
+        )
+        assert match is not None
+        assert match.list_name == "domain:amazon.com"
+        assert match.action == "move"
+        assert match.folder_key == "amazon"
+
+    def test_domain_match_case_insensitive(self, domain_mgr):
+        match = domain_mgr.lookup(
+            "order@Amazon.COM", account_email="jay@jay-cohen.info"
+        )
+        assert match is not None
+        assert match.list_name == "domain:amazon.com"
+
+    def test_domain_wrong_account_no_match(self, domain_mgr):
+        """Domain rule scoped to jay@jay-cohen.info should not match other accounts."""
+        match = domain_mgr.lookup(
+            "shipment@amazon.com", account_email="other@example.com"
+        )
+        assert match is None
+
+    def test_domain_no_account_no_match(self, domain_mgr):
+        """Domain rule with account scope should not match if no account is given."""
+        match = domain_mgr.lookup("shipment@amazon.com")
+        assert match is None
+
+    def test_exact_address_beats_domain(self, domain_mgr):
+        """An exact address match should take priority over a domain rule."""
+        # deals@amazon.com is in the vendor list
+        match = domain_mgr.lookup(
+            "deals@amazon.com", account_email="jay@jay-cohen.info"
+        )
+        assert match is not None
+        assert match.list_name == "vendor"
+
+    def test_domain_build_task(self, domain_mgr):
+        email = _make_email(from_addr="returns@amazon.com")
+        email = email.model_copy(update={"account_email": "jay@jay-cohen.info"})
+        match = domain_mgr.lookup(
+            "returns@amazon.com", account_email="jay@jay-cohen.info"
+        )
+        folders = {"inbox": "INBOX", "amazon": "INBOX.Amazon"}
+
+        task = domain_mgr.build_task_from_sender_match(email, match, folders)
+        assert task.proposed_action.action_type == EmailActionType.MOVE
+        assert task.proposed_action.target_folder == "INBOX.Amazon"
+        assert task.sender_list == "domain:amazon.com"
+        assert task.overall_confidence == 1.0
+        assert task.gate_action == GateAction.AUTO_EXECUTE

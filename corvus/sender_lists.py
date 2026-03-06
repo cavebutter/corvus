@@ -19,7 +19,12 @@ from corvus.schemas.email import (
     EmailMessage,
     EmailTriageTask,
 )
-from corvus.schemas.sender_lists import SenderListConfig, SenderListsFile, SenderMatch
+from corvus.schemas.sender_lists import (
+    DomainRuleConfig,
+    SenderListConfig,
+    SenderListsFile,
+    SenderMatch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,7 @@ class SenderListManager:
         self._data = data
         self._path = path
         self._index: dict[str, SenderMatch] = {}
+        self._domain_index: dict[str, DomainRuleConfig] = {}
         self._rebuild_index()
 
     @classmethod
@@ -86,9 +92,48 @@ class SenderListManager:
                     cleanup_days=lst.cleanup_days,
                 )
 
-    def lookup(self, address: str) -> SenderMatch | None:
-        """Look up an address in the sender lists. O(1)."""
-        return self._index.get(address.lower())
+        # Build domain rule index (first rule per domain wins)
+        self._domain_index.clear()
+        for rule in self._data.domain_rules:
+            domain = rule.domain.lower()
+            if domain not in self._domain_index:
+                self._domain_index[domain] = rule
+
+    def lookup(
+        self, address: str, *, account_email: str | None = None
+    ) -> SenderMatch | None:
+        """Look up an address in the sender lists, then domain rules. O(1).
+
+        Exact address matches take priority over domain rules.
+        Domain rules may be scoped to a specific account via account_email.
+        """
+        match = self._index.get(address.lower())
+        if match is not None:
+            return match
+
+        # Fall back to domain rules
+        domain = address.lower().rsplit("@", 1)[-1] if "@" in address else None
+        if domain is None:
+            return None
+
+        rule = self._domain_index.get(domain)
+        if rule is None:
+            return None
+
+        # Check account scope
+        if rule.account_email and (
+            account_email is None
+            or rule.account_email.lower() != account_email.lower()
+        ):
+            return None
+
+        return SenderMatch(
+            list_name=f"domain:{rule.domain}",
+            address=address.lower(),
+            action=rule.action,
+            folder_key=rule.folder_key,
+            cleanup_days=rule.cleanup_days,
+        )
 
     def add(self, list_name: str, address: str) -> bool:
         """Add an address to a list. Returns True if added, False if already present.

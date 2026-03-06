@@ -1328,7 +1328,9 @@ async def _email_review_async(*, limit: int | None = None) -> None:
         # Auto-apply pending items whose senders are on a non-white list
         auto_applied_ids: set[str] = set()
         for item in pending:
-            match = sender_lists.lookup(item.task.from_address)
+            match = sender_lists.lookup(
+                item.task.from_address, account_email=item.task.account_email
+            )
             if match and match.list_name != "white":
                 account_config = accounts_cache.get(item.task.account_email)
                 if not account_config:
@@ -1347,11 +1349,15 @@ async def _email_review_async(*, limit: int | None = None) -> None:
                 )
                 try:
                     async with ImapClient(account_config) as imap:
-                        await execute_email_action(sl_task, imap=imap)
-                    review_queue.approve(
-                        item.id,
-                        notes=f"Auto-applied: sender on '{match.list_name}' list",
-                    )
+                        applied = await execute_email_action(sl_task, imap=imap)
+                    if applied:
+                        notes = f"Auto-applied: sender on '{match.list_name}' list"
+                    else:
+                        notes = (
+                            f"Auto-applied: sender on '{match.list_name}' list "
+                            f"(stale — message no longer on server)"
+                        )
+                    review_queue.approve(item.id, notes=notes)
                     audit_log.log_sender_list_applied(sl_task)
                     auto_applied_ids.add(item.id)
                 except Exception:
@@ -1429,10 +1435,20 @@ async def _email_review_async(*, limit: int | None = None) -> None:
 
                 try:
                     async with ImapClient(account_config) as imap:
-                        await execute_email_action(task, imap=imap)
-                    review_queue.approve(item.id, notes="Approved via CLI")
-                    audit_log.log_review_approved(task)
-                    click.echo("  -> Approved and applied.")
+                        applied = await execute_email_action(task, imap=imap)
+                    if applied:
+                        review_queue.approve(item.id, notes="Approved via CLI")
+                        audit_log.log_review_approved(task)
+                        click.echo("  -> Approved and applied.")
+                    else:
+                        review_queue.approve(
+                            item.id,
+                            notes="Approved via CLI (stale — message no longer on server)",
+                        )
+                        click.echo(
+                            "  -> Message no longer on server (handled outside corvus). "
+                            "Marked approved."
+                        )
                     approved += 1
                 except Exception:
                     logger.exception("Error applying email action for %s", task.uid)
@@ -1461,6 +1477,17 @@ async def _email_review_async(*, limit: int | None = None) -> None:
 
                 try:
                     async with ImapClient(account_config) as imap:
+                        if not await imap.uid_exists(task.uid):
+                            review_queue.approve(
+                                item.id,
+                                notes="Delete via CLI (stale — message no longer on server)",
+                            )
+                            click.echo(
+                                "  -> Message no longer on server (handled outside corvus). "
+                                "Marked approved."
+                            )
+                            approved += 1
+                            continue
                         await imap.delete([task.uid])
                     review_queue.approve(item.id, notes="Deleted via CLI review")
                     from corvus.schemas.email import EmailAction, EmailActionType
@@ -1513,6 +1540,18 @@ async def _email_review_async(*, limit: int | None = None) -> None:
 
                     try:
                         async with ImapClient(account_config) as imap:
+                            if not await imap.uid_exists(task.uid):
+                                review_queue.approve(
+                                    item.id,
+                                    notes=f"Move to '{target_folder}' via CLI "
+                                    f"(stale — message no longer on server)",
+                                )
+                                click.echo(
+                                    "  -> Message no longer on server "
+                                    "(handled outside corvus). Marked approved."
+                                )
+                                approved += 1
+                                continue
                             await imap.move([task.uid], target_folder)
                         review_queue.approve(
                             item.id,
@@ -1566,7 +1605,9 @@ async def _email_review_async(*, limit: int | None = None) -> None:
                             f"  -> Added '{task.from_address}' to '{target_list}'."
                         )
                         # If the list has an auto-action (not white), apply immediately
-                        match = sender_lists.lookup(task.from_address)
+                        match = sender_lists.lookup(
+                            task.from_address, account_email=task.account_email
+                        )
                         if match and match.list_name != "white":
                             account_config = accounts_cache.get(task.account_email)
                             if account_config:

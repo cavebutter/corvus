@@ -4,6 +4,46 @@
 
 ---
 
+## Session: 2026-03-05 (session 23) — Stale UID Detection and Domain Rules
+
+### What was done
+
+**Stale UID detection in email review** — When messages are handled outside corvus (e.g. in a mail client) before `corvus email review` runs, the review flow now detects that the message is gone from the IMAP server and tells the user instead of silently no-opping.
+  - Added `uid_exists(uid)` method to `ImapClient` — lightweight headers-only fetch
+  - `execute_email_action()` now returns `bool` (True=acted, False=stale) — checks UID existence before any IMAP action (except KEEP)
+  - All CLI review paths (approve, delete, move, sender-list auto-apply) surface stale detection to the user: `"Message no longer on server (handled outside corvus). Marked approved."`
+  - Stale items are marked approved with a note indicating staleness, clearing them from the queue cleanly
+
+**Domain-level routing rules** — New `domain_rules` section in sender lists, separate from address-based lists. Matches all senders from a domain, optionally scoped to a specific account.
+  - Added `DomainRuleConfig` schema to `corvus/schemas/sender_lists.py`
+  - Added `domain_rules` field to `SenderListsFile`
+  - `SenderListManager.lookup()` now accepts optional `account_email`, checks exact addresses first, then falls back to domain rules
+  - Domain matches return `list_name="domain:<domain>"` — distinguishable from address lists and not shown in CLI `[l]` list
+  - All callers of `lookup()` updated to pass `account_email`
+  - Added `amazon.com` domain rule scoped to `jay@jay-cohen.info` → MOVE to `amazon` folder key (INBOX.Amazon)
+
+### Tests
+- 8 new tests: 2 stale UID tests in `test_email_router.py`, 6 domain rule tests in `test_sender_lists.py`
+- Existing tests updated: `_mock_imap()` includes `uid_exists`, return values asserted
+- Full suite: **661 passed**, 0 failed
+
+### Modified files
+- `corvus/integrations/imap.py` — `uid_exists()` method
+- `corvus/router/email.py` — `execute_email_action()` returns bool, stale UID check
+- `corvus/cli.py` — stale detection in approve/delete/move/auto-apply paths
+- `corvus/schemas/sender_lists.py` — `DomainRuleConfig`, `domain_rules` on `SenderListsFile`
+- `corvus/sender_lists.py` — domain index, `lookup()` with `account_email` param
+- `corvus/orchestrator/email_pipelines.py` — pass `account_email` to `lookup()`
+- `data/sender_lists.json` — amazon.com domain rule (not git-tracked)
+- `tests/test_email_router.py` — stale UID tests, return value assertions
+- `tests/test_sender_lists.py` — `TestDomainRules` class (6 tests)
+
+### Next steps
+- Monitor next triage run to confirm amazon.com domain rule works in practice
+- Consider adding domain rules for other high-volume domains if pattern proves useful
+
+---
+
 ## Session: 2026-03-04 (session 22) — IMAP Reconnect and Review Limit
 
 ### What was done

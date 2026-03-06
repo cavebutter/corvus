@@ -116,7 +116,9 @@ async def run_email_triage(
                     )
 
                     # Check sender lists before LLM
-                    match = sender_lists.lookup(email.from_address) if sender_lists else None
+                    match = sender_lists.lookup(
+                        email.from_address, account_email=email.account_email
+                    ) if sender_lists else None
 
                     if match and match.list_name != "white":
                         # Non-white list: skip LLM, build deterministic task,
@@ -319,7 +321,9 @@ async def run_email_summary(
         for email in messages:
             try:
                 # Check if sender is whitelisted
-                match = sender_lists.lookup(email.from_address) if sender_lists else None
+                match = sender_lists.lookup(
+                    email.from_address, account_email=email.account_email
+                ) if sender_lists else None
                 is_whitelisted = match is not None and match.list_name == "white"
 
                 try:

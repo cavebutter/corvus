@@ -51,9 +51,10 @@ def _make_task(
     )
 
 
-def _mock_imap() -> AsyncMock:
+def _mock_imap(*, uid_exists: bool = True) -> AsyncMock:
     """Create a mock ImapClient with all async action methods."""
     imap = AsyncMock()
+    imap.uid_exists = AsyncMock(return_value=uid_exists)
     imap.delete = AsyncMock()
     imap.move = AsyncMock()
     imap.flag = AsyncMock()
@@ -191,8 +192,9 @@ class TestExecuteEmailAction:
         task = _make_task(action_type=EmailActionType.DELETE)
         imap = _mock_imap()
 
-        await execute_email_action(task, imap=imap)
+        result = await execute_email_action(task, imap=imap)
 
+        assert result is True
         imap.delete.assert_awaited_once_with(["123"])
         imap.move.assert_not_called()
         imap.flag.assert_not_called()
@@ -204,8 +206,9 @@ class TestExecuteEmailAction:
         )
         imap = _mock_imap()
 
-        await execute_email_action(task, imap=imap)
+        result = await execute_email_action(task, imap=imap)
 
+        assert result is True
         imap.move.assert_awaited_once_with(["123"], "Corvus/Receipts")
         imap.delete.assert_not_called()
 
@@ -217,8 +220,9 @@ class TestExecuteEmailAction:
         )
         imap = _mock_imap()
 
-        await execute_email_action(task, imap=imap)
+        result = await execute_email_action(task, imap=imap)
 
+        assert result is True
         imap.move.assert_not_called()
         imap.delete.assert_not_called()
 
@@ -229,8 +233,9 @@ class TestExecuteEmailAction:
         )
         imap = _mock_imap()
 
-        await execute_email_action(task, imap=imap)
+        result = await execute_email_action(task, imap=imap)
 
+        assert result is True
         imap.flag.assert_awaited_once_with(["123"], "\\Important")
 
     async def test_flag_defaults_to_flagged(self):
@@ -241,17 +246,42 @@ class TestExecuteEmailAction:
         )
         imap = _mock_imap()
 
-        await execute_email_action(task, imap=imap)
+        result = await execute_email_action(task, imap=imap)
 
+        assert result is True
         imap.flag.assert_awaited_once_with(["123"], "\\Flagged")
 
     async def test_keep_does_nothing(self):
         task = _make_task(action_type=EmailActionType.KEEP)
         imap = _mock_imap()
 
-        await execute_email_action(task, imap=imap)
+        result = await execute_email_action(task, imap=imap)
 
+        assert result is True
         imap.delete.assert_not_called()
         imap.move.assert_not_called()
         imap.flag.assert_not_called()
         imap.mark_read.assert_not_called()
+        imap.uid_exists.assert_not_called()
+
+    async def test_stale_uid_returns_false(self):
+        """When the message no longer exists, return False and skip the action."""
+        task = _make_task(action_type=EmailActionType.DELETE)
+        imap = _mock_imap(uid_exists=False)
+
+        result = await execute_email_action(task, imap=imap)
+
+        assert result is False
+        imap.uid_exists.assert_awaited_once_with("123")
+        imap.delete.assert_not_called()
+        imap.move.assert_not_called()
+
+    async def test_stale_uid_keep_still_returns_true(self):
+        """KEEP skips the existence check entirely."""
+        task = _make_task(action_type=EmailActionType.KEEP)
+        imap = _mock_imap(uid_exists=False)
+
+        result = await execute_email_action(task, imap=imap)
+
+        assert result is True
+        imap.uid_exists.assert_not_called()

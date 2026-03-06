@@ -22,14 +22,32 @@ async def execute_email_action(
     task: EmailTriageTask,
     *,
     imap: ImapClient,
-) -> None:
+) -> bool:
     """Execute the proposed IMAP action for an email triage task.
 
     Args:
         task: The email triage task with the proposed action.
         imap: An open ImapClient instance.
+
+    Returns:
+        True if the action was executed, False if the message was
+        no longer present on the server (stale queue entry).
     """
     action = task.proposed_action
+
+    # KEEP needs no IMAP interaction — skip the existence check.
+    if action.action_type == EmailActionType.KEEP:
+        return True
+
+    if not await imap.uid_exists(task.uid):
+        logger.warning(
+            "Email UID %s no longer exists on server — "
+            "message was likely handled outside corvus (action=%s, subject=%r)",
+            task.uid,
+            action.action_type.value,
+            task.subject,
+        )
+        return False
 
     if action.action_type == EmailActionType.DELETE:
         await imap.delete([task.uid])
@@ -46,10 +64,10 @@ async def execute_email_action(
         await imap.flag([task.uid], flag)
     elif action.action_type == EmailActionType.MARK_READ:
         await imap.mark_read([task.uid])
-    elif action.action_type == EmailActionType.KEEP:
-        pass  # no action needed
     else:
         logger.warning("Unknown action type: %s", action.action_type)
+
+    return True
 
 
 async def route_email_action(

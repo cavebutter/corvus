@@ -227,6 +227,19 @@ class ImapClient:
 
         return await asyncio.to_thread(_fetch)
 
+    # --- Queries ---
+
+    async def uid_exists(self, uid: str) -> bool:
+        """Check whether a UID still exists in the currently selected folder."""
+
+        def _check() -> bool:
+            msgs = list(
+                self.mailbox.fetch(AND(uid=uid), headers_only=True, mark_seen=False, limit=1)
+            )
+            return len(msgs) > 0
+
+        return await asyncio.to_thread(self._with_reconnect, _check)
+
     # --- Actions ---
 
     async def move(self, uids: list[str], target_folder: str) -> None:

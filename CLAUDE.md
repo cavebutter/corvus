@@ -101,6 +101,21 @@ User (typed or spoken) → Orchestrator Agent
 - Claude **may** run `git diff` and `git status` freely without asking permission.
 - Claude **may** resolve merge conflicts **only after asking for and receiving explicit permission**.
 
+### Commit Message Format
+
+When writing commit messages, provide a ready-to-paste `git commit` command using these rules:
+
+1. **Use single quotes** around message text (prevents shell expansion of backticks, `$`, etc.).
+2. **Use multiple `-m` flags** for multi-paragraph messages — each `-m` becomes a separate paragraph.
+3. **No `Co-Authored-By` line.**
+4. **No heredoc format** — it doesn't paste reliably across terminals.
+
+Example:
+```bash
+git commit -m 'Short summary of changes' -m 'Longer explanation of why the change was made,
+spanning multiple lines if needed.' -m 'Additional context in a third paragraph if warranted.'
+```
+
 ---
 
 ## Project Documents (Maintained by Claude)

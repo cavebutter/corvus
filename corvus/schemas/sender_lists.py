@@ -19,11 +19,23 @@ class SenderListConfig(BaseModel):
     addresses: list[str] = Field(default_factory=list)
 
 
+class DomainRuleConfig(BaseModel):
+    """A domain-level routing rule (e.g. all @amazon.com → move to Amazon)."""
+
+    domain: str  # e.g. "amazon.com"
+    action: str  # "keep", "move", "delete"
+    folder_key: str | None = None
+    cleanup_days: int | None = None
+    description: str = ""
+    account_email: str | None = None  # restrict to a specific account, or None for all
+
+
 class SenderListsFile(BaseModel):
     """Top-level schema for the sender_lists.json file."""
 
     lists: dict[str, SenderListConfig] = Field(default_factory=dict)
     priority: list[str] = Field(default_factory=list)
+    domain_rules: list[DomainRuleConfig] = Field(default_factory=list)
 
 
 class SenderMatch(BaseModel):
