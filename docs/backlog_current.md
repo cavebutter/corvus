@@ -25,7 +25,7 @@ Phone (PWA)  ──Cloudflare Tunnel──>  corvus serve (FastAPI)
 
 ### Stories
 
-- [ ] **S21.1** FastAPI server foundation
+- [x] **S21.1** FastAPI server foundation
   - FastAPI app with lifespan (initialize shared clients: Ollama, Paperless)
   - Static file serving for frontend assets
   - Health endpoint (`GET /api/health`)
@@ -34,14 +34,14 @@ Phone (PWA)  ──Cloudflare Tunnel──>  corvus serve (FastAPI)
   - API key auth dependency (from config, `X-API-Key` header)
   - Config: `API_KEY`, `SERVE_HOST`, `SERVE_PORT`
 
-- [ ] **S21.2** Status & audit API endpoints
+- [x] **S21.2** Status & audit API endpoints
   - `GET /api/status` — pipeline stats (pending counts, 24h activity), same data as `corvus status` + `corvus email status`
   - `GET /api/audit/documents?since=&limit=` — document audit log entries
   - `GET /api/audit/email?since=&limit=` — email audit log entries
   - `GET /api/audit/watchdog?since=&limit=` — watchdog audit log entries
   - Pydantic response models (reuse existing schemas where possible)
 
-- [ ] **S21.3** Review queue API endpoints
+- [x] **S21.3** Review queue API endpoints
   - `GET /api/review/documents` — pending document review items
   - `POST /api/review/documents/{id}/approve` — approve with optional notes
   - `POST /api/review/documents/{id}/reject` — reject with optional notes

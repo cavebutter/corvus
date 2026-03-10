@@ -1,0 +1,18 @@
+/* Corvus PWA — custom styles (supplements Pico CSS) */
+
+:root {
+    --corvus-accent: #7c3aed;
+}
+
+#connection-status {
+    color: var(--muted-color);
+    font-size: 0.8rem;
+}
+
+#connection-status.connected {
+    color: #22c55e;
+}
+
+#connection-status.error {
+    color: #ef4444;
+}

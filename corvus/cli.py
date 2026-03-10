@@ -1227,6 +1227,41 @@ def _find_email_account(accounts: list[dict], email_filter: str | None) -> list[
     return accounts
 
 
+# ------------------------------------------------------------------
+# serve — FastAPI web server
+# ------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--host", default=None, help="Bind address (default: from config or 0.0.0.0).")
+@click.option("--port", "-p", default=None, type=int, help="Port (default: from config or 8095).")
+@click.option("--reload", "live_reload", is_flag=True, help="Auto-reload on code changes (dev).")
+def serve(host: str | None, port: int | None, live_reload: bool) -> None:
+    """Start the Corvus web server (PWA + REST API)."""
+    import uvicorn
+
+    from corvus.config import API_KEY, SERVE_HOST, SERVE_PORT
+
+    if not API_KEY:
+        click.echo(
+            "Warning: API_KEY is not set. All protected endpoints will return 500.",
+            err=True,
+        )
+        click.echo("Set API_KEY in secrets/internal.env.", err=True)
+
+    bind_host = host or SERVE_HOST
+    bind_port = port or SERVE_PORT
+
+    click.echo(f"Starting Corvus on {bind_host}:{bind_port}")
+    uvicorn.run(
+        "corvus.web.app:app",
+        host=bind_host,
+        port=bind_port,
+        reload=live_reload,
+        log_level="info",
+    )
+
+
 @cli.group()
 def email() -> None:
     """Email inbox management."""

@@ -4,6 +4,62 @@
 
 ---
 
+## Session: 2026-03-10 (session 24) — PWA Backend (S21.1–S21.3)
+
+### What was done
+
+**S21.1: FastAPI server foundation**
+- Created `corvus/web/` package with FastAPI app, API key auth, static file serving
+- PWA shell: `index.html` (Pico CSS dark theme), `manifest.json`, service worker (static asset caching), `app.js` (health poll + connection indicator)
+- Generated 192x192 and 512x512 PWA icons from `corvus.png` logo
+- `corvus serve` CLI command (`--host`, `--port`, `--reload`) via uvicorn
+- Config: `API_KEY`, `SERVE_HOST` (default 0.0.0.0), `SERVE_PORT` (default 8095)
+- Added `fastapi>=0.115` and `uvicorn[standard]>=0.34` to dependencies
+
+**S21.2: Status & audit API endpoints**
+- `GET /api/status` — combined document + email pipeline status (pending counts, 24h activity breakdown)
+- `GET /api/audit/documents?since=&limit=` — document audit log entries
+- `GET /api/audit/email?since=&limit=` — email audit log entries
+- `GET /api/audit/watchdog?since=&limit=` — watchdog audit log entries
+- Extracted all API routes to `corvus/web/routes.py` (APIRouter with auth dependency)
+
+**S21.3: Review queue API endpoints**
+- `GET /api/review/documents` — list pending document review items
+- `POST /api/review/documents/{id}/approve` — approve + apply to Paperless (calls `apply_approved_update`)
+- `POST /api/review/documents/{id}/reject` — reject with optional notes
+- `GET /api/review/email` — list pending email review items
+- `POST /api/review/email/{id}/approve` — approve + execute IMAP action (handles stale messages)
+- `POST /api/review/email/{id}/reject` — reject with optional notes
+- Error responses: 404 (not found), 409 (already reviewed), 400 (no account config), 502 (Paperless/IMAP failure)
+
+### Tests
+- 29 new tests in `tests/test_web.py`
+- Full suite: **690 passed**, 0 failed
+
+### New files
+- `corvus/web/__init__.py`
+- `corvus/web/app.py` — FastAPI app with lifespan, CORS, health endpoint, router, static mount
+- `corvus/web/auth.py` — `require_api_key` dependency
+- `corvus/web/routes.py` — all API route handlers (status, audit, review)
+- `corvus/web/static/index.html`, `style.css`, `app.js`, `sw.js`, `manifest.json`
+- `corvus/web/static/icon-192.png`, `icon-512.png`
+- `tests/test_web.py`
+
+### Modified files
+- `corvus/config.py` — `API_KEY`, `SERVE_HOST`, `SERVE_PORT`
+- `corvus/cli.py` — `corvus serve` command
+- `pyproject.toml` — fastapi + uvicorn dependencies
+
+### User testing
+- Server started, favicon visible, Pico CSS dark theme, green connection indicator
+- All API endpoints confirmed working via curl (status, audit logs, review queues)
+
+### Next steps
+- **S21.4** Dashboard frontend — wire up status + activity feed in the HTML
+- **S21.5** Review interface frontend — approve/reject from the phone
+
+---
+
 ## Session: 2026-03-05 (session 23) — Stale UID Detection and Domain Rules
 
 ### What was done

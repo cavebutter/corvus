@@ -92,6 +92,11 @@ EMAIL_SENDER_LISTS_PATH: str = _internal.get(
     "EMAIL_SENDER_LISTS_PATH", str(PROJECT_ROOT / "data" / "sender_lists.json")
 )
 
+# --- Web / PWA ---
+API_KEY: str = _internal.get("API_KEY", "")
+SERVE_HOST: str = _internal.get("SERVE_HOST", "0.0.0.0")
+SERVE_PORT: int = int(_internal.get("SERVE_PORT", "8095"))
+
 # --- Maintenance ---
 RETENTION_DAYS: int = int(_internal.get("RETENTION_DAYS", "90"))
 
