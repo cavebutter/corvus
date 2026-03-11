@@ -45,7 +45,7 @@ class TestWakeWordDetector:
         detector = WakeWordDetector(model_path="hey_jarvis", threshold=0.5)
         async with detector:
             assert detector.enabled
-            _mock_openwakeword.Model.assert_called_once_with(wakeword_models=["hey_jarvis"])
+            _mock_openwakeword.Model.assert_called_once_with(wakeword_models=["hey_jarvis"], inference_framework="onnx")
 
     async def test_detection_above_threshold(self, tmp_path, _mock_openwakeword):
         """Test that process_frame returns event when confidence exceeds threshold."""

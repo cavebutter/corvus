@@ -50,14 +50,14 @@ Phone (PWA)  ──Cloudflare Tunnel──>  corvus serve (FastAPI)
   - `POST /api/review/email/{id}/reject` — reject with optional notes
   - Error handling for already-reviewed items
 
-- [ ] **S21.4** Dashboard frontend
+- [x] **S21.4** Dashboard frontend
   - Single-page layout: status cards (pending counts, 24h stats), recent activity feed
   - Auto-refresh via polling or SSE (simple first, upgrade to SSE if needed)
   - Mobile-first responsive layout
   - PWA manifest (`manifest.json`) + service worker (offline shell, cache static assets)
   - Install-to-homescreen support (icons, theme color, standalone display)
 
-- [ ] **S21.5** Review interface frontend
+- [x] **S21.5** Review interface frontend
   - Document review: show task details (title, tags, correspondent, confidence, reasoning), approve/reject buttons
   - Email review: show sender, subject, category, proposed action, confidence, approve/reject/delete buttons
   - Swipe or tap interactions for quick review
@@ -82,6 +82,13 @@ Phone (PWA)  ──Cloudflare Tunnel──>  corvus serve (FastAPI)
   - Cloudflare Zero Trust access policy (email-based or one-time PIN)
   - HTTPS termination at Cloudflare edge (FastAPI serves HTTP internally)
   - Test from mobile on cellular (not LAN)
+
+- [ ] **S21.10** UI polish pass
+  - Nav logo sizing (too small at 2rem, needs to be visible on mobile)
+  - Overall spacing, typography, and color tuning
+  - Dark theme consistency check
+  - Mobile layout testing (status cards, activity feed, review items)
+  - Tap target sizes for mobile review actions
 
 - [ ] **S21.9** Tests
   - API endpoint tests (TestClient, mocked services)

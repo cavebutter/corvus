@@ -63,7 +63,7 @@ class WakeWordDetector:
         from openwakeword import Model
 
         logger.info("Loading wake word model: %s", model_ref)
-        self._model = Model(wakeword_models=[model_ref])
+        self._model = Model(wakeword_models=[model_ref], inference_framework="onnx")
         self._enabled = True
         try:
             self._keyword = next(iter(self._model.models.keys()))

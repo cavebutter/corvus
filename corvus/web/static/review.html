@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corvus — Review</title>
+    <meta name="theme-color" content="#1a1a2e">
+    <link rel="icon" href="/icon-192.png" type="image/png">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <header class="container">
+        <nav>
+            <ul><li><img src="/icon-192.png" alt="Corvus" class="nav-logo"><strong>Corvus</strong></li></ul>
+            <ul>
+                <li><a href="/" class="nav-link">Dashboard</a></li>
+                <li><a href="/review.html" class="nav-link active">Review</a></li>
+                <li id="connection-status">●</li>
+            </ul>
+        </nav>
+    </header>
+    <main class="container" id="app">
+
+        <!-- Tab switcher -->
+        <div class="review-tabs" role="tablist">
+            <button class="review-tab active" data-tab="email" role="tab">
+                Email <span id="email-badge" class="badge">0</span>
+            </button>
+            <button class="review-tab" data-tab="documents" role="tab">
+                Documents <span id="doc-badge" class="badge">0</span>
+            </button>
+        </div>
+
+        <!-- Email review list -->
+        <section id="tab-email" class="review-panel">
+            <div id="email-list"></div>
+            <p id="email-empty" class="muted" style="display:none;">No pending email items.</p>
+        </section>
+
+        <!-- Document review list -->
+        <section id="tab-documents" class="review-panel" style="display:none;">
+            <div id="doc-list"></div>
+            <p id="doc-empty" class="muted" style="display:none;">No pending document items.</p>
+        </section>
+
+    </main>
+    <script src="/review.js"></script>
+</body>
+</html>

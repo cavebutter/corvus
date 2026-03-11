@@ -4,44 +4,49 @@
 
 ---
 
-## Session: 2026-03-10 (session 24) — PWA Backend (S21.1–S21.3)
+## Session: 2026-03-10 (session 24) — PWA Backend + Frontend (S21.1–S21.5)
 
 ### What was done
 
 **S21.1: FastAPI server foundation**
 - Created `corvus/web/` package with FastAPI app, API key auth, static file serving
-- PWA shell: `index.html` (Pico CSS dark theme), `manifest.json`, service worker (static asset caching), `app.js` (health poll + connection indicator)
-- Generated 192x192 and 512x512 PWA icons from `corvus.png` logo
+- PWA shell with Pico CSS dark theme, manifest, service worker (static asset caching)
 - `corvus serve` CLI command (`--host`, `--port`, `--reload`) via uvicorn
 - Config: `API_KEY`, `SERVE_HOST` (default 0.0.0.0), `SERVE_PORT` (default 8095)
 - Added `fastapi>=0.115` and `uvicorn[standard]>=0.34` to dependencies
+- Generated PWA icons (192x192, 512x512) from `corvus.png` logo
 
 **S21.2: Status & audit API endpoints**
-- `GET /api/status` — combined document + email pipeline status (pending counts, 24h activity breakdown)
-- `GET /api/audit/documents?since=&limit=` — document audit log entries
-- `GET /api/audit/email?since=&limit=` — email audit log entries
-- `GET /api/audit/watchdog?since=&limit=` — watchdog audit log entries
-- Extracted all API routes to `corvus/web/routes.py` (APIRouter with auth dependency)
+- `GET /api/status` — combined document + email pipeline status
+- `GET /api/audit/{documents,email,watchdog}?since=&limit=` — audit log queries
+- All routes in `corvus/web/routes.py` (APIRouter with auth dependency)
 
 **S21.3: Review queue API endpoints**
-- `GET /api/review/documents` — list pending document review items
-- `POST /api/review/documents/{id}/approve` — approve + apply to Paperless (calls `apply_approved_update`)
-- `POST /api/review/documents/{id}/reject` — reject with optional notes
-- `GET /api/review/email` — list pending email review items
-- `POST /api/review/email/{id}/approve` — approve + execute IMAP action (handles stale messages)
-- `POST /api/review/email/{id}/reject` — reject with optional notes
-- Error responses: 404 (not found), 409 (already reviewed), 400 (no account config), 502 (Paperless/IMAP failure)
+- `GET /api/review/{documents,email}` — list pending items
+- `POST /api/review/{documents,email}/{id}/{approve,reject}` — act on items
+- Document approve applies to Paperless, email approve executes IMAP action
+- Error handling: 404, 409, 400, 502
+
+**S21.4: Dashboard frontend**
+- Status cards (document + email pipeline stats), activity feed (merged from all 3 audit logs)
+- API key prompt on first visit (stores in localStorage), auto-refresh every 30s
+- Nav bar with logo, Dashboard/Review links, connection indicator
+- Raven logo in nav (noted as too small — tracked in S21.10)
+
+**S21.5: Review interface frontend**
+- `review.html` + `review.js` — tabbed Email/Documents view with badge counts
+- Email cards: sender, subject, category badge (color-coded), summary, proposed action, confidence bar, reasoning
+- Document cards: title, tags, correspondent, type, confidence bar, reasoning, expandable content snippet
+- Approve/reject buttons with optimistic UI (fade + slide out, revert on error)
+- Redirects to dashboard if no API key stored
 
 ### Tests
-- 29 new tests in `tests/test_web.py`
+- 29 tests in `tests/test_web.py`
 - Full suite: **690 passed**, 0 failed
 
-### New files
-- `corvus/web/__init__.py`
-- `corvus/web/app.py` — FastAPI app with lifespan, CORS, health endpoint, router, static mount
-- `corvus/web/auth.py` — `require_api_key` dependency
-- `corvus/web/routes.py` — all API route handlers (status, audit, review)
-- `corvus/web/static/index.html`, `style.css`, `app.js`, `sw.js`, `manifest.json`
+### All new files
+- `corvus/web/__init__.py`, `app.py`, `auth.py`, `routes.py`
+- `corvus/web/static/index.html`, `review.html`, `style.css`, `app.js`, `review.js`, `sw.js`, `manifest.json`
 - `corvus/web/static/icon-192.png`, `icon-512.png`
 - `tests/test_web.py`
 
@@ -49,14 +54,47 @@
 - `corvus/config.py` — `API_KEY`, `SERVE_HOST`, `SERVE_PORT`
 - `corvus/cli.py` — `corvus serve` command
 - `pyproject.toml` — fastapi + uvicorn dependencies
+- `docs/backlog_current.md` — S21.1–S21.3 marked done, S21.10 (UI polish) added
 
 ### User testing
-- Server started, favicon visible, Pico CSS dark theme, green connection indicator
-- All API endpoints confirmed working via curl (status, audit logs, review queues)
+- All API endpoints confirmed working via curl
+- Dashboard loads with real data, activity feed populates, status cards accurate
+- Review page loads, approve/reject functional
+- Logo visible in nav (too small, deferred to S21.10)
 
-### Next steps
-- **S21.4** Dashboard frontend — wire up status + activity feed in the HTML
-- **S21.5** Review interface frontend — approve/reject from the phone
+### Current state — not yet committed
+- All S21.1–S21.5 changes are on disk, not committed. Commit message for S21.1–S21.3 was provided but not yet run by user. S21.4 + S21.5 changes are additional uncommitted work on top.
+
+### Wake word training — COMPLETE
+
+**Model:** `models/hey_corvus.onnx` (501 KB) — custom "Hey Corvus" wake word, 0.99+ confidence, ~7ms inference
+**Training repo:** `/mnt/hdd/PycharmProjects/openwakeword-training`
+
+**What was done:**
+- Cloned CoreWorxLab/openwakeword-training, fixed multiple issues (see gotchas)
+- Downloaded 17 GB training data (ACAV100M features, MIT RIRs, FMA music, synthetic background noise)
+- Recorded 44 real voice samples of "Hey Corvus"
+- Generated ~8200 positive + ~8200 negative synthetic samples via Kokoro TTS (41 voices)
+- Trained 50K steps — completed in ~5 minutes on RTX 4090 (not 4-8 hours as advertised)
+- Tested live: 0.967-0.994 confidence scores, 6-8ms inference, zero false positives during testing
+
+**Corvus integration:**
+- Model deployed to `corvus/models/hey_corvus.onnx`
+- `corvus/config.py` default changed from `hey_jarvis` to `models/hey_corvus.onnx`
+- `corvus/voice/wakeword.py` updated to pass `inference_framework="onnx"` (host openwakeword defaults to tflite)
+- Test updated to match new call signature
+- All 690 tests passing
+
+**Gotchas encountered:**
+- Dockerfile needed `portaudio19-dev` added to apt packages (pyaudio build failed)
+- exFAT filesystem on `/mnt/hdd` doesn't support `chown` — pre-create mount dirs before `docker compose run`
+- `datasets==2.14.6` incompatible with `pyarrow>=15`/`numpy>=2` — pinned `pyarrow>=12,<15`, `numpy<2`, `scipy<1.12`
+- AudioSet HuggingFace repo converted to Parquet, old tar URLs 404 — replaced with synthetic noise generation
+- OWW `train.py` unconditionally imports `generate_samples` (Piper TTS) — created dummy stub module
+- Docker shared memory default (64 MB) too small for PyTorch DataLoader — added `shm_size: '4gb'`
+- `depends_on: kokoro` in docker-compose auto-starts Kokoro GPU container, eating 20 GB VRAM — removed for `--train-only`
+- Host openwakeword defaults to tflite inference — must pass `inference_framework="onnx"` for .onnx models
+- JACK audio warnings during recording/testing are harmless (PortAudio probes all backends)
 
 ---
 

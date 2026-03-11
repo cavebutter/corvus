@@ -15,12 +15,87 @@
 <body>
     <header class="container">
         <nav>
-            <ul><li><strong>Corvus</strong></li></ul>
-            <ul><li id="connection-status">●</li></ul>
+            <ul><li><img src="/icon-192.png" alt="Corvus" class="nav-logo"><strong>Corvus</strong></li></ul>
+            <ul>
+                <li><a href="/" class="nav-link active">Dashboard</a></li>
+                <li><a href="/review.html" class="nav-link">Review</a></li>
+                <li id="connection-status">●</li>
+            </ul>
         </nav>
     </header>
     <main class="container" id="app">
-        <p>Dashboard coming in S21.4.</p>
+
+        <!-- API key prompt (shown if no key stored) -->
+        <article id="auth-prompt" style="display:none;">
+            <header>API Key Required</header>
+            <p>Enter your Corvus API key to connect.</p>
+            <input type="password" id="api-key-input" placeholder="API key">
+            <button id="api-key-submit">Connect</button>
+        </article>
+
+        <!-- Status cards -->
+        <section id="dashboard" style="display:none;">
+            <div class="grid">
+                <article>
+                    <header>Documents</header>
+                    <div class="stat-grid">
+                        <div class="stat">
+                            <span class="stat-value" id="doc-pending">—</span>
+                            <span class="stat-label">Pending review</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="doc-processed">—</span>
+                            <span class="stat-label">Processed (24h)</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="doc-reviewed">—</span>
+                            <span class="stat-label">Reviewed (24h)</span>
+                        </div>
+                    </div>
+                </article>
+                <article>
+                    <header>Email</header>
+                    <div class="stat-grid">
+                        <div class="stat">
+                            <span class="stat-value" id="email-pending">—</span>
+                            <span class="stat-label">Pending review</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="email-auto">—</span>
+                            <span class="stat-label">Auto-applied (24h)</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="email-sender-list">—</span>
+                            <span class="stat-label">Sender list (24h)</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="email-queued">—</span>
+                            <span class="stat-label">Queued (24h)</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="email-approved">—</span>
+                            <span class="stat-label">Approved (24h)</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="email-rejected">—</span>
+                            <span class="stat-label">Rejected (24h)</span>
+                        </div>
+                    </div>
+                </article>
+            </div>
+
+            <!-- Recent activity -->
+            <article>
+                <header>
+                    Recent Activity
+                    <small id="activity-age"></small>
+                </header>
+                <div id="activity-feed">
+                    <p class="muted">Loading...</p>
+                </div>
+            </article>
+        </section>
+
     </main>
     <script src="/app.js"></script>
 </body>

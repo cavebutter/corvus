@@ -1,11 +1,13 @@
 /* Corvus PWA — service worker (static asset caching only) */
 
-const CACHE_NAME = "corvus-v1";
+const CACHE_NAME = "corvus-v3";
 const STATIC_ASSETS = [
     "/",
     "/index.html",
+    "/review.html",
     "/style.css",
     "/app.js",
+    "/review.js",
     "/manifest.json",
 ];
 
