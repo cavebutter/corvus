@@ -518,3 +518,155 @@ class TestServeCLI:
         assert "--host" in result.output
         assert "--port" in result.output
         assert "--reload" in result.output
+
+
+# ── Voice WebSocket ─────────────────────────────────────────────────
+
+
+class TestVoiceWebSocket:
+    """Tests for the /ws/voice WebSocket endpoint."""
+
+    def test_ws_rejects_missing_api_key(self, client):
+        """WS with no api_key query param gets closed with 4001."""
+        from starlette.websockets import WebSocketDisconnect
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/voice"):
+                pass
+        assert exc_info.value.code == 4001
+
+    def test_ws_rejects_wrong_api_key(self, client):
+        from starlette.websockets import WebSocketDisconnect
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/voice?api_key=wrong"):
+                pass
+        assert exc_info.value.code == 4001
+
+    def test_ws_accepts_valid_api_key(self, client, api_key):
+        """Valid key gets a 'ready' message."""
+        with patch("corvus.web.voice_ws.API_KEY", api_key):
+            with client.websocket_connect(f"/ws/voice?api_key={api_key}") as ws:
+                msg = ws.receive_json()
+                assert msg["type"] == "ready"
+
+    def test_ws_ping_pong(self, client, api_key):
+        with patch("corvus.web.voice_ws.API_KEY", api_key):
+            with client.websocket_connect(f"/ws/voice?api_key={api_key}") as ws:
+                ws.receive_json()  # ready
+                ws.send_json({"type": "ping"})
+                msg = ws.receive_json()
+                assert msg["type"] == "pong"
+
+    def test_ws_audio_round_trip(self, client, api_key):
+        """Send audio_start + audio data + audio_end, expect transcription."""
+        import numpy as np
+
+        mock_result = type("R", (), {"text": "hello world", "language": "en",
+                                     "duration_seconds": 1.0, "no_speech_probability": 0.1})()
+
+        mock_stt = type("STT", (), {"transcribe": lambda self, x: mock_result})()
+        # Make transcribe async
+        import asyncio
+        async def mock_transcribe(audio):
+            return mock_result
+        mock_stt.transcribe = mock_transcribe
+
+        mock_response = None
+
+        async def mock_process_text(text, history):
+            from corvus.schemas.orchestrator import (
+                Intent,
+                OrchestratorAction,
+                OrchestratorResponse,
+            )
+            return OrchestratorResponse(
+                action=OrchestratorAction.CHAT_RESPONSE,
+                intent=Intent.GENERAL_CHAT,
+                confidence=0.95,
+                message="Hello there!",
+            )
+
+        mock_tts_audio = np.zeros(2400, dtype=np.float32)
+
+        async def mock_synth_full(self, text):
+            return mock_tts_audio, 24000
+
+        mock_tts = type("TTS", (), {"synthesize_full": mock_synth_full})()
+
+        async def mock_get_stt():
+            return mock_stt
+
+        async def mock_get_tts():
+            return mock_tts
+
+        with (
+            patch("corvus.web.voice_ws.API_KEY", api_key),
+            patch("corvus.web.voice_ws.voice_models.get_stt", mock_get_stt),
+            patch("corvus.web.voice_ws.voice_models.get_tts", mock_get_tts),
+            patch("corvus.web.voice_ws._process_text", mock_process_text),
+            patch("corvus.orchestrator.conversation_store.ConversationStore") as MockStore,
+        ):
+            mock_store_inst = MockStore.return_value
+            mock_store_inst.create.return_value = "conv-123"
+
+            with client.websocket_connect(f"/ws/voice?api_key={api_key}") as ws:
+                ready = ws.receive_json()
+                assert ready["type"] == "ready"
+
+                # Send audio
+                ws.send_json({"type": "audio_start"})
+                listening = ws.receive_json()
+                assert listening["type"] == "listening"
+
+                # Send some PCM audio bytes
+                audio = np.random.randn(16000).astype(np.float32)
+                ws.send_bytes(audio.tobytes())
+                ws.send_json({"type": "audio_end"})
+
+                # Should get: transcription, thinking, response, audio_start, audio bytes, audio_end
+                transcription = ws.receive_json()
+                assert transcription["type"] == "transcription"
+                assert transcription["text"] == "hello world"
+
+                thinking = ws.receive_json()
+                assert thinking["type"] == "thinking"
+
+                response = ws.receive_json()
+                assert response["type"] == "response"
+                assert "Hello" in response["text"]
+
+                audio_start = ws.receive_json()
+                assert audio_start["type"] == "audio_start"
+                assert audio_start["sample_rate"] == 24000
+
+                # Receive binary audio chunk(s)
+                audio_data = ws.receive()
+                assert "bytes" in audio_data
+
+                audio_end = ws.receive_json()
+                assert audio_end["type"] == "audio_end"
+
+    def test_ws_empty_audio(self, client, api_key):
+        """Empty audio (immediate audio_end) returns empty transcription."""
+        mock_stt = type("STT", (), {})()
+
+        async def mock_get_stt():
+            return mock_stt
+
+        with (
+            patch("corvus.web.voice_ws.API_KEY", api_key),
+            patch("corvus.web.voice_ws.voice_models.get_stt", mock_get_stt),
+            patch("corvus.orchestrator.conversation_store.ConversationStore"),
+        ):
+            with client.websocket_connect(f"/ws/voice?api_key={api_key}") as ws:
+                ws.receive_json()  # ready
+
+                ws.send_json({"type": "audio_start"})
+                ws.receive_json()  # listening
+
+                ws.send_json({"type": "audio_end"})
+
+                transcription = ws.receive_json()
+                assert transcription["type"] == "transcription"
+                assert transcription["text"] == ""

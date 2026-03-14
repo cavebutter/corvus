@@ -77,8 +77,11 @@ genuinely ambiguous.
 6. For web_search, copy the user's query into search_query as-is. Classify as \
 web_search when the answer requires real-time information, current events, \
 factual knowledge beyond the document system, or the user explicitly says \
-"search" or "look up".
-7. When ambiguous between web_search and general_chat, prefer general_chat.
+"search" or "look up". Questions about weather, news, scores, prices, \
+stock quotes, or anything time-sensitive MUST be web_search — never general_chat.
+7. When ambiguous between web_search and general_chat, prefer general_chat \
+ONLY if the question can be fully answered from general knowledge without \
+needing current data.
 8. When conversation context is provided, use it to resolve ambiguous references \
 like "the first one", "that document", "download it", etc.
 """

@@ -13,8 +13,10 @@ from corvus.orchestrator.conversation_store import ConversationStore
 from corvus.orchestrator.history import ConversationHistory, summarize_response
 from corvus.orchestrator.router import dispatch
 from corvus.planner.intent_classifier import classify_intent
+import re
+
 from corvus.schemas.email import EmailSummaryResult, EmailTriageResult
-from corvus.schemas.orchestrator import OrchestratorAction
+from corvus.schemas.orchestrator import OrchestratorAction, WebSearchResult
 from corvus.schemas.voice import AudioConfig, VoiceState
 from corvus.voice.audio import AudioCapture, AudioPlayer, generate_ack_tone
 from corvus.voice.stt import SpeechRecognizer
@@ -280,6 +282,9 @@ def _response_to_speech(response) -> str:
             )
         if isinstance(response.result, EmailSummaryResult):
             return response.result.summary
+        if isinstance(response.result, WebSearchResult):
+            # Strip citation footnotes like [1], [2], [1][3] — awkward in speech
+            return re.sub(r"\s*\[\d+\]", "", response.result.summary)
 
     if response.action == OrchestratorAction.DISPATCHED:
         return summarize_response(response)

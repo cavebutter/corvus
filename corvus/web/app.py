@@ -1,16 +1,17 @@
 """FastAPI application for the Corvus PWA.
 
-Serves the REST API and static frontend assets.
+Serves the REST API, WebSocket voice endpoint, and static frontend assets.
 """
 
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from corvus.web.routes import router
+from corvus.web.voice_ws import voice_models, voice_websocket_endpoint
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -18,8 +19,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and tear down shared resources."""
-    # Future: initialize shared clients (Ollama, Paperless, IMAP) here
     yield
+    # Clean up voice models if they were loaded
+    await voice_models.cleanup()
 
 
 app = FastAPI(
@@ -43,6 +45,14 @@ app.add_middleware(
 async def health():
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+# ── Voice WebSocket (auth via query param) ───────────────────────────
+
+@app.websocket("/ws/voice")
+async def voice_ws(websocket: WebSocket):
+    """Voice interaction over WebSocket."""
+    await voice_websocket_endpoint(websocket)
 
 
 # ── Protected API routes (from router) ───────────────────────────────

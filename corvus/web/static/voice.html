@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corvus — Voice</title>
+    <meta name="description" content="Corvus — voice assistant">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#1a1a2e">
+    <link rel="icon" href="/icon-192.png" type="image/png">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <header class="container">
+        <nav>
+            <ul><li><img src="/icon-192.png" alt="Corvus" class="nav-logo"><strong>Corvus</strong></li></ul>
+            <ul>
+                <li><a href="/" class="nav-link">Dashboard</a></li>
+                <li><a href="/review.html" class="nav-link">Review</a></li>
+                <li><a href="/voice.html" class="nav-link active">Voice</a></li>
+                <li id="connection-status">●</li>
+            </ul>
+        </nav>
+    </header>
+    <main class="container" id="app">
+
+        <section id="voice-ui" style="display:none;">
+            <!-- Conversation log -->
+            <div id="voice-log" class="voice-log"></div>
+
+            <!-- State indicator -->
+            <div id="voice-state" class="voice-state">Tap to speak</div>
+
+            <!-- Talk button -->
+            <div class="voice-button-wrap">
+                <button id="talk-btn" class="voice-button" aria-label="Tap to talk">
+                    <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                </button>
+            </div>
+        </section>
+
+    </main>
+    <script src="/voice.js"></script>
+</body>
+</html>
