@@ -175,13 +175,25 @@ async def run_tag_pipeline(
 
     _emit(f"\nDone. Processed: {processed}, Errors: {errors}")
 
-    return TagPipelineResult(
+    result = TagPipelineResult(
         processed=processed,
         queued=queued,
         auto_applied=auto_applied,
         errors=errors,
         details=details,
     )
+
+    # Fire-and-forget notification
+    from corvus.integrations.ntfy import notify_tag_pipeline_complete
+
+    await notify_tag_pipeline_complete(
+        processed=processed,
+        queued=queued,
+        auto_applied=auto_applied,
+        errors=errors,
+    )
+
+    return result
 
 
 async def run_fetch_pipeline(

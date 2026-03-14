@@ -33,6 +33,8 @@ from corvus.config import (
     EMAIL_BATCH_SIZE,
     EMAIL_REVIEW_DB_PATH,
     EMAIL_SENDER_LISTS_PATH,
+    NTFY_SERVER,
+    NTFY_TOPIC,
     OLLAMA_BASE_URL,
     PAPERLESS_API_TOKEN,
     PAPERLESS_BASE_URL,
@@ -297,7 +299,8 @@ async def _review_async() -> None:
 
 @cli.command()
 @click.option("--hours", default=24, show_default=True, help="Lookback period in hours.")
-def digest(hours: int) -> None:
+@click.option("--notify", is_flag=True, help="Send digest summary via push notification.")
+def digest(hours: int, notify: bool) -> None:
     """Show activity digest for the recent period."""
     from corvus.orchestrator.pipelines import run_digest_pipeline
 
@@ -307,6 +310,13 @@ def digest(hours: int) -> None:
         hours=hours,
     )
     click.echo(result.rendered_text)
+
+    if notify:
+        import asyncio
+
+        from corvus.integrations.ntfy import notify_digest_ready
+
+        asyncio.run(notify_digest_ready(result.rendered_text))
 
 
 # ------------------------------------------------------------------
@@ -1260,6 +1270,27 @@ def serve(host: str | None, port: int | None, live_reload: bool) -> None:
         reload=live_reload,
         log_level="info",
     )
+
+
+@cli.command()
+@click.argument("message", default="Test notification from Corvus")
+def notify(message: str) -> None:
+    """Send a test push notification via Ntfy."""
+    import asyncio
+
+    from corvus.integrations.ntfy import notify as ntfy_notify
+
+    if not NTFY_SERVER or not NTFY_TOPIC:
+        click.echo("Error: NTFY_SERVER and NTFY_TOPIC must be set in secrets/internal.env.", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Sending to {NTFY_SERVER}/***...")
+    ok = asyncio.run(ntfy_notify(message, title="Corvus test", tags=["test_tube"]))
+    if ok:
+        click.echo("Sent successfully.")
+    else:
+        click.echo("Failed to send. Check logs for details.", err=True)
+        raise SystemExit(1)
 
 
 @cli.group()

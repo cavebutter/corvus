@@ -97,6 +97,10 @@ API_KEY: str = _internal.get("API_KEY", "")
 SERVE_HOST: str = _internal.get("SERVE_HOST", "0.0.0.0")
 SERVE_PORT: int = int(_internal.get("SERVE_PORT", "8095"))
 
+# --- Notifications (Ntfy) ---
+NTFY_SERVER: str = _internal.get("NTFY_SERVER", "")
+NTFY_TOPIC: str = _internal.get("NTFY_TOPIC", "")
+
 # --- Maintenance ---
 RETENTION_DAYS: int = int(_internal.get("RETENTION_DAYS", "90"))
 

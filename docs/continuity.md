@@ -4,6 +4,40 @@
 
 ---
 
+## Session: 2026-03-14 (session 25) — Voice WebSocket commit + Ntfy Notifications (S21.6–S21.7)
+
+### What was done
+
+**S21.6: Voice over WebSocket** — committed at session start (was complete on disk from session 24 crash).
+
+**S21.7: Push notifications via Ntfy**
+- `corvus/integrations/ntfy.py` — async Ntfy client with fire-and-forget semantics. `send()` POSTs to `{server}/{topic}` with headers for title, priority, tags, click URL. Returns bool, never raises.
+- Pipeline helpers: `notify_triage_complete()`, `notify_tag_pipeline_complete()`, `notify_digest_ready()`, `notify_pipeline_error()`
+- Notifications only fire when meaningful: triage/tag pipelines skip notification if nothing was queued and no errors occurred
+- Config: `NTFY_SERVER`, `NTFY_TOPIC` in `corvus/config.py`
+- Hooked into `run_tag_pipeline()` and `run_email_triage()` — fire-and-forget after pipeline completes
+- `corvus digest --notify` flag sends digest text via push notification (for cron use)
+- `corvus notify [message]` — CLI test command to verify Ntfy connectivity
+- 19 new tests in `tests/test_ntfy.py`: send behavior (success, failure, network error, no config, trailing slash, priority/headers), all pipeline helpers, CLI notify command, digest --notify flag
+- Full suite: **715 passed**, 0 failed
+
+### New files
+- `corvus/integrations/ntfy.py`
+- `tests/test_ntfy.py`
+
+### Modified files
+- `corvus/config.py` — `NTFY_SERVER`, `NTFY_TOPIC`
+- `corvus/cli.py` — `notify` command, `digest --notify` flag, `NTFY_SERVER`/`NTFY_TOPIC` imports
+- `corvus/orchestrator/pipelines.py` — notification hook after tag pipeline
+- `corvus/orchestrator/email_pipelines.py` — notification hook after email triage
+- `docs/backlog_current.md` — S21.7 marked done
+
+### Next steps
+- Set `NTFY_SERVER` and `NTFY_TOPIC` in `secrets/internal.env` and test with `corvus notify`
+- Remaining Epic 21 stories: S21.8 (Cloudflare Tunnel), S21.9 (tests), S21.10 (UI polish)
+
+---
+
 ## Session: 2026-03-10 (session 24) — PWA Backend + Frontend (S21.1–S21.5)
 
 ### What was done

@@ -248,7 +248,7 @@ async def run_email_triage(
         f"(sender list: {sender_list_acted}), Queued: {queued}, Errors: {errors}"
     )
 
-    return EmailTriageResult(
+    result = EmailTriageResult(
         account_email=account_config.email,
         processed=processed,
         auto_acted=auto_acted,
@@ -256,6 +256,19 @@ async def run_email_triage(
         errors=errors,
         categories=categories,
     )
+
+    # Fire-and-forget notification
+    from corvus.integrations.ntfy import notify_triage_complete
+
+    await notify_triage_complete(
+        account_email=account_config.email,
+        processed=processed,
+        queued=queued,
+        auto_acted=auto_acted,
+        errors=errors,
+    )
+
+    return result
 
 
 async def run_email_summary(

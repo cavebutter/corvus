@@ -71,7 +71,7 @@ Phone (PWA)  ──Cloudflare Tunnel──>  corvus serve (FastAPI)
   - Tap-to-talk button on frontend (no wake word on mobile — browser limitations)
   - Conversation context maintained per WS connection
 
-- [ ] **S21.7** Push notifications via Ntfy
+- [x] **S21.7** Push notifications via Ntfy
   - Config: `NTFY_TOPIC`, `NTFY_SERVER` (default: `https://ntfy.sh` or self-hosted)
   - Notify on: new items queued for review, daily digest ready, pipeline errors
   - `corvus/integrations/ntfy.py` — simple async httpx POST
