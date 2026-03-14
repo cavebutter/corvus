@@ -77,7 +77,7 @@ Phone (PWA)  ──Cloudflare Tunnel──>  corvus serve (FastAPI)
   - `corvus/integrations/ntfy.py` — simple async httpx POST
   - Hook into review queue `.add()` and digest generation
 
-- [ ] **S21.8** Cloudflare Tunnel setup & docs
+- [x] **S21.8** Cloudflare Tunnel setup & docs
   - Document tunnel configuration for `corvus serve`
   - Cloudflare Zero Trust access policy (email-based or one-time PIN)
   - HTTPS termination at Cloudflare edge (FastAPI serves HTTP internally)
